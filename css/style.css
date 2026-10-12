@@ -70,3 +70,6 @@ label.f{display:block;font-size:12px;font-weight:650;color:#41526b;margin-bottom
 @media(max-width:860px){.app{grid-template-columns:1fr}.side{position:fixed;left:-270px;width:260px;transition:.2s}.side.open{left:0;box-shadow:0 0 0 100vw rgba(0,0,0,.4)}.mob{display:grid}.top{padding:10px 14px}.page{padding:16px 14px 50px}.search{width:auto;flex:1}.g4,.g2{grid-template-columns:1fr}.fg{grid-template-columns:1fr}.login{grid-template-columns:1fr}.login .hero{display:none}.top h2{display:none}}
 @media print{.side,.top,.filters,.btn{display:none!important}.app{display:block}.page{padding:0}}
 .btn{white-space:nowrap}.top h2{display:none}@media(min-width:861px){.top .sp{order:0}}
+.logo-tile{background:#fff;border-radius:11px;padding:5px 7px;display:grid;place-items:center;width:52px;height:44px;flex:none}.logo-tile img{max-width:100%;max-height:100%;display:block}
+.login-logo{display:block;height:84px;margin:0 0 22px}
+.brand{gap:12px}

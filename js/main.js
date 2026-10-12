@@ -35,10 +35,10 @@ const ERR = { 'auth/invalid-credential': 'E-mail ou senha inválidos.', 'auth/wr
 /* ------------------------------------------------------------------ telas de acesso */
 function splash(msg = 'Carregando…') { root.innerHTML = `<div class="splash"><div><div class="spin"></div>${esc(msg)}</div></div>`; }
 function showLogin(msg) {
-  root.innerHTML = `<div class="login"><div class="hero"><div><div class="brand" style="padding:0"><div class="logo">${icon('bank', 20)}</div><div>Controle Financeiro<small>GESTÃO DE CARTEIRA E COBRANÇA</small></div></div>
+  root.innerHTML = `<div class="login"><div class="hero"><div><div class="brand" style="padding:0"><div class="logo-tile"><img src="assets/logo.png" alt="Plugin Celulares &amp; Acessórios"></div><div>Controle Financeiro<small>PLUGIN CELULARES &amp; ACESSÓRIOS</small></div></div>
     <h1>Gestão financeira em tempo real, para toda a equipe.</h1><p>Recebimentos, recompras, renegociações e inadimplência num só lugar — cada operação registrada com quem fez e quando.</p>
     <ul><li>Pagamentos parciais com abatimento automático nas próximas parcelas</li><li>Várias pessoas trabalhando ao mesmo tempo, sem conflito de dados</li><li>Histórico completo de todas as operações</li><li>Acesso protegido por login e perfil de permissão</li></ul></div><div class="mute" style="color:#7d92ad;font-size:12px">Acesso restrito a usuários autorizados.</div></div>
-    <div class="box"><form id="lf"><h2>Entrar</h2><p class="mute" style="margin:0 0 20px">Use seu e-mail e senha de acesso.</p>${msg ? `<div class="alert bad">${esc(msg)}</div>` : ''}
+    <div class="box"><form id="lf"><img class="login-logo" src="assets/logo.png" alt="Plugin"><h2>Entrar</h2><p class="mute" style="margin:0 0 20px">Use seu e-mail e senha de acesso.</p>${msg ? `<div class="alert bad">${esc(msg)}</div>` : ''}
     <label class="f">E-mail</label><input class="inp" id="le" type="email" autocomplete="username" required autofocus><div style="height:12px"></div><label class="f">Senha</label><input class="inp" id="lp" type="password" autocomplete="current-password" required>
     <button class="btn primary" style="width:100%;justify-content:center;margin-top:18px;padding:11px" id="lb">Entrar</button>
     ${!CONFIGURED ? `<div class="demo"><b>Modo demonstração</b> (Firebase ainda não configurado — dados fictícios só neste navegador).<br>Admin: <a href="#" data-fill="admin@demo.com|admin123">admin@demo.com / admin123</a><br>Financeiro: <a href="#" data-fill="financeiro@demo.com|fin123">financeiro@demo.com / fin123</a></div>` : ''}</form></div></div>`;
@@ -86,7 +86,7 @@ function startSession() {
 function renderShell() {
   const adm = app.user.role === 'admin';
   root.innerHTML = `${!CONFIGURED ? '<div class="banner demo">🧪 <b>Modo demonstração</b> — dados fictícios guardados só neste navegador. Configure o Firebase para uso real (veja SETUP.md).</div>' : ''}<div class="banner hide" id="offline">⚠ Sem conexão com a internet — gravações só funcionam online.</div>
-  <div class="app"><aside class="side" id="side"><div class="brand"><div class="logo">${icon('bank', 20)}</div><div>Controle Financeiro<small>CARTEIRA E COBRANÇA</small></div></div><nav class="nav" id="nav">
+  <div class="app"><aside class="side" id="side"><div class="brand"><div class="logo-tile"><img src="assets/logo.png" alt="Plugin"></div><div>Controle Financeiro<small>PLUGIN CELULARES</small></div></div><nav class="nav" id="nav">
    ${NAV.map(([g, items]) => { const its = items.filter((i) => adm || !ADMIN_ONLY.has(i[0])); return its.length ? `<h6>${g}</h6>${its.map(([k, l, ic, cnt]) => `<a href="#/${k}" data-r="${k}">${icon(ic, 18)}<span>${l}</span>${cnt ? `<span class="cnt" data-cnt="${cnt}"></span>` : ''}</a>`).join('')}` : ''; }).join('')}</nav>
    <div class="foot">${app.adapter.mode === 'firebase' ? '● Firebase conectado' : '● Modo demonstração'}<br>v1.0</div></aside>
    <div class="main"><header class="top"><button class="icon-btn mob" id="burger">${icon('menu', 22)}</button><h2 id="ttl"></h2>
