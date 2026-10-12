@@ -1,0 +1,53 @@
+rules_version = '2';
+// Regras de segurança — Controle Financeiro
+// Perfis (documento users/{uid}.role): "admin" e "financeiro". Usuário precisa estar com ativo != false.
+service cloud.firestore {
+  match /databases/{db}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function profile()  { return get(/databases/$(db)/documents/users/$(request.auth.uid)).data; }
+    function active()   { return signedIn()
+                            && exists(/databases/$(db)/documents/users/$(request.auth.uid))
+                            && profile().ativo != false; }
+    function isAdmin()  { return active() && profile().role == 'admin'; }
+
+    // Usuários: cada um lê o próprio perfil (mesmo antes de liberado); equipe ativa lê a lista; só admin altera.
+    match /users/{uid} {
+      allow read:  if (signedIn() && request.auth.uid == uid) || active();
+      allow write: if isAdmin();
+    }
+
+    // Dados operacionais: equipe ativa lê/cria/altera; somente admin exclui.
+    match /contratos/{id}    { allow read, create, update: if active(); allow delete: if isAdmin(); }
+    match /parcelas/{id}     { allow read, create, update: if active(); allow delete: if isAdmin(); }
+    match /recompras/{id}    { allow read, create, update: if active(); allow delete: if isAdmin(); }
+    match /acordos/{id}      { allow read, create, update: if active(); allow delete: if isAdmin(); }
+    match /antecipacoes/{id} { allow read, create, update: if active(); allow delete: if isAdmin(); }
+    match /contadores/{id}   { allow read, create, update: if active(); allow delete: if isAdmin(); }
+
+    // Pagamentos: equipe lança; somente admin estorna (update) ou exclui.
+    match /pagamentos/{id} {
+      allow read, create: if active();
+      allow update, delete: if isAdmin();
+    }
+
+    // Log: leitura pela equipe; criação só em nome do próprio usuário; NUNCA altera nem apaga (trilha de auditoria).
+    match /historico/{id} {
+      allow read: if active();
+      allow create: if active() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // Parâmetros e bancos: leitura pela equipe, escrita só admin.
+    match /config/{id}  { allow read: if active(); allow write: if isAdmin(); }
+    match /bancos/{id}  { allow read: if active(); allow write: if isAdmin(); }
+
+    // Presença (quem está online): cada um grava a própria; equipe lê.
+    match /presence/{uid} {
+      allow read: if active();
+      allow write: if active() && request.auth.uid == uid;
+    }
+
+    match /{document=**} { allow read, write: if false; }
+  }
+}
