@@ -182,9 +182,21 @@ export async function acaoRenegociarDireto(parcelaId) {
   const p = M().pBy.get(parcelaId); if (!p) return;
   if (await confirmDialog(`Marcar a parcela ${p.n} de ${p.cliente} (${brl(p.devido)}) como RENEGOCIADA direto?\n\nEla deixa de contar como inadimplente.`, { title: 'Renegociação direta', okLabel: 'Marcar' })) { await ops.renegociarDireto(parcelaId); toast('Parcela renegociada.', 'ok'); }
 }
-export async function acaoProtestar(parcelaId) {
+/** Protesto no cartório: cartório, data e protocolo (também usado para corrigir os dados de um protesto já marcado). */
+export function acaoProtestar(parcelaId) {
   const r = M().rBy.get(parcelaId); if (!r) return;
-  if (await confirmDialog(`Marcar a recompra de ${r.cliente} (parcela ${r.nParc}, ${brl(r.saldo)}) como PROTESTADA?`, { title: 'Protesto', okLabel: 'Protestar', danger: true })) { await ops.resolverRecompra(parcelaId, 'Protestado'); toast('Recompra protestada.', 'ok'); }
+  if (r.status === 'Pago') return toast('Recompra já paga.', 'warn');
+  if (r.status === 'Renegociado') return toast('Recompra renegociada: reabra antes de marcar protesto.', 'warn');
+  const edit = r.status === 'Protestado';
+  const cartorios = [...new Set(store.list('recompras').map((x) => x.cartorio).filter(Boolean))].sort();
+  const m = modal({ title: edit ? 'Dados do protesto' : 'Marcar protesto', size: 'sm', body: `<div class="alert info"><b>${esc(r.cliente)}</b> · parcela ${r.nParc}${r.nivel ? ' (acordo ' + r.nivel + ')' : ''} · saldo <b>${brl(r.saldo)}</b></div><div class="fg" style="margin-top:10px">
+    ${field('Cartório onde foi protestado', `<input class="inp" id="pt-c" list="pt-cl" placeholder="ex.: 1º Tabelionato de Protesto de Nova Serrana" value="${esc(r.cartorio || '')}" autocomplete="off"><datalist id="pt-cl">${cartorios.map((c) => `<option value="${esc(c)}">`).join('')}</datalist>`, '', 'full')}
+    ${field('Data do protesto', `<input class="inp" type="date" id="pt-d" value="${r.dtProtesto || (edit && r.dtBaixa) || hojeISO()}" max="${hojeISO()}">`)}
+    ${field('Nº do protocolo', `<input class="inp" id="pt-p" placeholder="opcional" value="${esc(r.protocoloProtesto || '')}">`)}
+    ${field('Observação', `<input class="inp" id="pt-o" placeholder="opcional" value="${esc(r.obsProtesto || '')}">`, '', 'full')}</div>`,
+    actions: [{ label: 'Cancelar', cls: 'ghost' }, { label: edit ? 'Salvar' : 'Protestar', cls: edit ? 'primary' : 'danger', onClick: async () => {
+      await ops.registrarProtesto(parcelaId, { data: $('#pt-d', m.el).value, cartorio: $('#pt-c', m.el).value, protocolo: $('#pt-p', m.el).value, obs: $('#pt-o', m.el).value }); toast(edit ? 'Dados do protesto salvos.' : 'Recompra protestada.', 'ok');
+    } }] });
 }
 export async function acaoReabrirRecompra(parcelaId) {
   if (await confirmDialog('Reabrir esta recompra (volta a ficar sem resolução)?', { title: 'Reabrir recompra', okLabel: 'Reabrir' })) { await ops.resolverRecompra(parcelaId, null); toast('Recompra reaberta.', 'ok'); }
@@ -251,4 +263,82 @@ export async function acaoEstornar(grupo) {
   const total = gs.reduce((s, g) => s + g.valor, 0);
   const motivo = await promptDialog(`Estornar o pagamento de ${brl(total)} (${fmtData(gs[0].data)})? As parcelas voltam ao estado anterior. Informe o motivo:`, { title: 'Estornar pagamento', okLabel: 'Estornar', placeholder: 'motivo do estorno' });
   if (motivo == null) return; await ops.estornarPagamento(grupo, motivo.trim()); toast('Pagamento estornado.', 'ok');
+}
+
+/* ----------------------------------------------------------------- operações em grupo (várias parcelas do cliente) */
+const linhasSel = (sel) => {
+  const mm = M(); const out = [];
+  for (const it of sel) {
+    if (it.tipo === 'parcela') { const p = mm.pBy.get(it.id); if (p) out.push({ ...it, p, venc: p.venc, saldo: p.saldo, nivel: p.nivel, rotulo: `${p.nivel ? 'Acordo ' + p.nivel + ' · ' : ''}Parcela ${p.n}`, rec: false }); }
+    else { const r = mm.rBy.get(it.id); if (r) out.push({ ...it, p: mm.pBy.get(it.id), r, venc: r.venc, saldo: r.saldo, nivel: r.nivel, rotulo: `RECOMPRA · ${r.nivel ? 'Acordo ' + r.nivel + ' · ' : ''}Parcela ${r.nParc}${r.status ? ' (' + r.status + ')' : ''}`, rec: true }); }
+  }
+  return out.sort((a, b) => (a.venc < b.venc ? -1 : a.venc > b.venc ? 1 : a.nivel - b.nivel));
+};
+const tabelaSel = (ls) => `<div class="tbl-wrap" style="max-height:200px;overflow:auto;border:1px solid var(--line);border-radius:8px"><table class="tbl"><thead><tr><th>Item</th><th>Venc.</th><th class="r">Saldo</th></tr></thead><tbody>${ls.map((l) => `<tr><td>${esc(l.rotulo)}</td><td>${fmtData(l.venc)}</td><td class="r">${brl(l.saldo)}</td></tr>`).join('')}</tbody></table></div>`;
+const somaSel = (ls) => round2(ls.reduce((s, l) => s + l.saldo, 0));
+
+/** Quitação total de vários itens com valor negociado (desconto/acréscimo opcional, rateado entre os itens). */
+export function abrirQuitarGrupo(contrato, sel, onDone) {
+  const c = M().cBy.get(contrato); const ls = linhasSel(sel); if (!c || !ls.length) return toast('Selecione ao menos um item.', 'warn');
+  const soma = somaSel(ls);
+  const m = modal({ title: `Quitação total — ${ls.length} item(ns)`, size: 'lg', body: `<div class="alert info"><b>${esc(c.cliente)}</b> · ${esc(c.id)} · ${esc(c.banco)}</div>${tabelaSel(ls)}
+    <div class="fg" style="margin-top:12px">
+    ${field('Soma dos saldos', `<input class="inp" value="${brl(soma)}" disabled>`)}
+    ${field('Valor a receber (R$)', `<input class="inp" id="qg-v" inputmode="decimal" value="${brInput(soma)}">`, 'Menor que a soma = desconto · maior = acréscimo (multa/juros). A diferença é rateada entre os itens.')}
+    ${field('Desconto em %', `<input class="inp" id="qg-pct" inputmode="decimal" placeholder="ex.: 10">`, 'Atalho: calcula o valor acima.')}
+    ${field('Motivo do desconto/acréscimo', `<input class="inp" id="qg-m" placeholder="obrigatório se houver diferença">`)}
+    ${field('Data do pagamento', `<input class="inp" type="date" id="qg-d" value="${hojeISO()}" max="${hojeISO()}">`)}
+    ${field('Forma', `<select class="inp" id="qg-f">${FORMAS.map((f) => `<option>${f}</option>`).join('')}</select>`)}
+    ${field('Observação', `<input class="inp" id="qg-o" placeholder="opcional">`, '', 'full')}</div><div class="preview" id="qg-prev"></div>`,
+    actions: [{ label: 'Cancelar', cls: 'ghost' }, { label: 'Confirmar quitação', cls: 'primary', onClick: async (api) => {
+      const v = parseBRL($('#qg-v', m.el).value); if (!(v > 0)) throw new Error('Informe o valor a receber.');
+      const forma = $('#qg-f', m.el).value, data = $('#qg-d', m.el).value;
+      const r = await ops.quitarGrupo({ contrato, itens: sel.map(({ tipo, id }) => ({ tipo, id })), valorFinal: v, data, forma, obs: $('#qg-o', m.el).value.trim(), motivo: $('#qg-m', m.el).value });
+      toast(`Quitação de ${brl(v)} registrada (${ls.length} itens).`, 'ok'); if (onDone) onDone(); mostrarRecibo(c, r, { data, forma });
+    } }] });
+  const prev = () => {
+    const v = parseBRL($('#qg-v', m.el).value), d = isNaN(v) ? 0 : round2(v - soma);
+    $('#qg-prev', m.el).innerHTML = isNaN(v) ? '<span class="mute">Informe o valor.</span>' : d === 0 ? `Receber <b>${brl(v)}</b> — quita os ${ls.length} itens pelo valor cheio.` : `Receber <b>${brl(v)}</b> — ${d < 0 ? 'desconto' : 'acréscimo'} de <b>${brl(Math.abs(d))}</b> (${(Math.abs(d) / soma * 100).toFixed(1).replace('.', ',')}% da soma de ${brl(soma)}), rateado entre os itens.`;
+  };
+  $('#qg-v', m.el).addEventListener('input', () => { $('#qg-pct', m.el).value = ''; prev(); });
+  $('#qg-pct', m.el).addEventListener('input', () => { const p = parseBRL($('#qg-pct', m.el).value); if (!isNaN(p)) { $('#qg-v', m.el).value = brInput(Math.max(0.01, round2(soma * (1 - p / 100)))); if (!$('#qg-m', m.el).value) $('#qg-m', m.el).value = 'Desconto para quitação total'; } prev(); });
+  prev();
+}
+
+/** Recompra de várias parcelas de uma vez. */
+export function abrirRecomprarGrupo(contrato, sel, onDone) {
+  const c = M().cBy.get(contrato); const ls = linhasSel(sel).filter((l) => !l.rec); if (!c || !ls.length) return toast('Selecione parcelas em aberto.', 'warn');
+  const m = modal({ title: `Recomprar ${ls.length} parcela(s)`, size: 'lg', body: `<div class="alert info"><b>${esc(c.cliente)}</b> · ${esc(c.id)} · ${esc(c.banco)}<br>As parcelas passam a ser tratadas na aba Recompras (e, em bancos com antecipação, liberam limite). Total: <b>${brl(somaSel(ls))}</b></div>${tabelaSel(ls)}
+    <div class="fg" style="margin-top:12px">${field('Data da recompra', `<input class="inp" type="date" id="rg-d" value="${hojeISO()}">`)}</div>`,
+    actions: [{ label: 'Cancelar', cls: 'ghost' }, { label: 'Recomprar todas', cls: 'primary', onClick: async () => {
+      const r = await ops.recomprarGrupo({ contrato, ids: ls.map((l) => l.id), data: $('#rg-d', m.el).value || hojeISO() }); toast(`${r.qtd} parcela(s) recomprada(s) — ${brl(r.total)}.`, 'ok'); if (onDone) onDone();
+    } }] });
+}
+
+/** Renegociação de várias parcelas/recompras num único acordo. */
+export function abrirRenegGrupo(contrato, sel, onDone) {
+  const mm = M(); const c = mm.cBy.get(contrato); const ls = linhasSel(sel); const P = mm.P; if (!c || !ls.length) return toast('Selecione ao menos um item.', 'warn');
+  const niveis = [...new Set(ls.map((l) => l.nivel))]; if (niveis.length > 1) return toast('Selecione itens do mesmo nível (parcelas normais OU de um mesmo acordo).', 'warn');
+  const nivel = niveis[0] + 1; if (nivel > P.maxNiveis) return toast('Limite de níveis de acordo atingido.', 'warn');
+  if ((mm.aDe.get(contrato) || []).some((a) => a.nivel === nivel)) return toast(`O contrato já tem o ${nivel}º acordo cadastrado (um por nível).`, 'warn');
+  const soma = somaSel(ls);
+  const m = modal({ title: `${nivel}º acordo — ${ls.length} item(ns) — ${c.cliente}`, size: 'lg', body: `<div class="alert info">Os itens selecionados serão recomprados (se ainda forem parcelas) e renegociados em <b>um único acordo</b>. Soma dos saldos: <b>${brl(soma)}</b></div>${tabelaSel(ls)}<div class="fg" style="margin-top:12px">
+    ${field('Valor base do acordo (R$)', `<input class="inp" id="rn-valor" value="${brInput(soma)}">`, 'Soma dos saldos ou outro valor negociado (desconto).')}
+    ${field('Encargos do acordo (R$)', `<input class="inp" id="rn-enc" inputmode="decimal" placeholder="0,00">`, 'IOF, juros, tarifas… Pode ser negativo (desconto).')}
+    ${field('Qtd. de parcelas', `<input class="inp" type="number" id="rn-qtd" min="1" max="${P.maxParcAcordo}" value="3">`, `máx. ${P.maxParcAcordo}`)}
+    ${field('1º vencimento', `<input class="inp" type="date" id="rn-venc" value="${addDays(hojeISO(), 30)}">`)}
+    ${field('Data da renegociação', `<input class="inp" type="date" id="rn-data" value="${hojeISO()}" max="${hojeISO()}">`)}
+    ${field('Observações', `<input class="inp" id="rn-obs">`, '', 'full')}</div><div class="preview" id="rn-prev"></div>`,
+    actions: [{ label: 'Cancelar', cls: 'ghost' }, { label: 'Renegociar', cls: 'primary', onClick: async () => {
+      const base = parseBRL($('#rn-valor', m.el).value), enc = parseBRL($('#rn-enc', m.el).value) || 0;
+      const a = { valor: round2(base + enc), encargos: round2(enc), qtd: +$('#rn-qtd', m.el).value, primeiroVenc: $('#rn-venc', m.el).value, dtReneg: $('#rn-data', m.el).value, obs: $('#rn-obs', m.el).value };
+      const r = await ops.renegociarGrupo({ contrato, itens: sel.map(({ tipo, id }) => ({ tipo, id })), acordo: a, data: a.dtReneg }); toast(`${r.nivel}º acordo cadastrado: ${a.qtd} parcelas geradas.`, 'ok'); if (onDone) onDone();
+    } }] });
+  const prev = () => {
+    const enc = parseBRL($('#rn-enc', m.el).value) || 0, v = round2((parseBRL($('#rn-valor', m.el).value) || 0) + enc), q = +$('#rn-qtd', m.el).value, d = $('#rn-venc', m.el).value; const box = $('#rn-prev', m.el);
+    if (!(v > 0) || !(q > 0) || !d) { box.innerHTML = '<span class="mute">Preencha os dados do acordo.</span>'; return; }
+    const arr = ops.dividirParcelas(v, q); const dif = round2(v - soma);
+    box.innerHTML = `Valor do acordo: <b>${brl(v)}</b>${enc ? ` (base + ${brl(enc)} de encargos)` : ''}<br><b>${q} parcelas</b> de ${brl(arr[0])}${arr[q - 1] !== arr[0] ? ` (última ${brl(arr[q - 1])})` : ''} · de ${fmtData(d)} a ${fmtData(addMonths(d, q - 1))}<br><span class="mute">Diferença acordo × saldos: ${dif >= 0 ? '+' : ''}${brl(dif)} ${dif < 0 ? '(desconto concedido)' : ''}</span>`;
+  };
+  $$('input', m.el).forEach((x) => x.addEventListener('input', prev)); prev();
 }

@@ -9,6 +9,7 @@ import { create as createPainel } from './views/painel.js';
 import { create as createCobranca } from './views/cobranca.js';
 import { createLista, createDetalhe } from './views/clientes.js';
 import { createParcelas, createPagamentos, createRecompras, createAcordos, createAntecipacao, createInadimplencia, createHistorico } from './views/listas.js';
+import { createRelatorios } from './views/relatorios.js';
 import { createUsuarios, createConfig, createDados } from './views/admin.js';
 
 const root = document.getElementById('root');
@@ -18,7 +19,7 @@ let unsubs = [], timers = [], current = null, bootTs = 0, seenOnline = null, she
 
 const ROUTES = {
   painel: () => createPainel, clientes: () => createLista, parcelas: () => createParcelas, pagamentos: () => createPagamentos, recompras: () => createRecompras, acordos: () => createAcordos,
-  cobranca: () => createCobranca, inadimplencia: () => createInadimplencia, antecipacao: () => createAntecipacao, historico: () => createHistorico,
+  cobranca: () => createCobranca, inadimplencia: () => createInadimplencia, antecipacao: () => createAntecipacao, historico: () => createHistorico, relatorios: () => createRelatorios,
   usuarios: () => createUsuarios, config: () => createConfig, dados: () => createDados,
 };
 const ADMIN_ONLY = new Set(['usuarios', 'config', 'dados']);
@@ -26,6 +27,7 @@ const NAV = [
   ['VISÃO GERAL', [['painel', 'Painel', 'chart']]],
   ['OPERAÇÃO', [['clientes', 'Clientes', 'users'], ['parcelas', 'Parcelas', 'list'], ['pagamentos', 'Pagamentos', 'cash'], ['recompras', 'Recompras', 'undo', 'rec'], ['acordos', 'Acordos', 'handshake']]],
   ['COBRANÇA E RISCO', [['cobranca', 'Régua e críticos', 'bell', 'crit'], ['inadimplencia', 'Inadimplência', 'alert'], ['antecipacao', 'Antecipação', 'bank']]],
+  ['ANÁLISE', [['relatorios', 'Relatórios', 'chart']]],
   ['SISTEMA', [['historico', 'Histórico', 'clock'], ['usuarios', 'Usuários', 'shield'], ['config', 'Parâmetros e bancos', 'gear'], ['dados', 'Dados e planilha', 'db']]],
 ];
 const ctx = { M: () => store.model(), go: (h) => { if (location.hash === h) route(); else location.hash = h; } };

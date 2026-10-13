@@ -1,7 +1,7 @@
 // Operações de negócio. TODAS gravam em transação (leitura fresca -> validação -> escrita) e registram o log na mesma transação,
 // de modo que dois usuários nunca sobrescrevem um ao outro nem geram dados pela metade.
 import { app } from './store.js';
-import { round2, toC, fromC, addMonths, hojeISO, montarFila, ratear, saldoDoc, devidoDoc, valorRecDoc, fmtData, brl, DEFAULT_PARAMS } from './rules.js';
+import { round2, toC, fromC, addMonths, hojeISO, montarFila, ratear, saldoDoc, devidoDoc, valorRecDoc, rotuloParcela, fmtData, brl, DEFAULT_PARAMS } from './rules.js';
 
 export class OpError extends Error {}
 const A = () => app.adapter;
@@ -248,7 +248,7 @@ export async function resolverRecompra(parcelaId, status, data = hojeISO()) { //
       if (r.status === 'Pago') throw new OpError('Para reabrir uma recompra paga, estorne o pagamento.');
       const ac = await t.get('acordos', `${p.contrato}/N${p.nivel + 1}`);
       if (r.status === 'Renegociado' && ac) throw new OpError('Existe acordo cadastrado: exclua o acordo antes de reabrir.');
-      t.update('recompras', parcelaId, { status: null, dtBaixa: null });
+      t.update('recompras', parcelaId, { status: null, dtBaixa: null, dtProtesto: null, cartorio: '', protocoloProtesto: '', obsProtesto: '' });
       log(t, 'Reabrir recompra', { entidade: 'recompra', id: parcelaId, ...ctInfo(p.contrato), detalhe: `Recompra da parcela ${p.n} reaberta (era ${r.status}).` });
       return;
     }
@@ -441,5 +441,133 @@ export async function atualizarUsuario(uid, campos) {
     const u = await t.get('users', uid); if (!u) throw new OpError('Usuário não encontrado.');
     t.update('users', uid, campos);
     log(t, 'Editar usuário', { entidade: 'usuario', id: uid, detalhe: `${u.nome}: ` + Object.entries(campos).map(([k, v]) => `${k} → ${v}`).join('; ') });
+  });
+}
+
+/* ------------------------------------------------------------------ PROTESTO (dados do cartório) */
+/** Marca (ou corrige os dados de) o protesto de uma recompra: cartório, data e protocolo. */
+export async function registrarProtesto(parcelaId, { data, cartorio, protocolo = '', obs = '' }) {
+  need();
+  cartorio = String(cartorio || '').trim(); protocolo = String(protocolo || '').trim(); obs = String(obs || '').trim();
+  if (cartorio.length < 2) throw new OpError('Informe o cartório onde o protesto foi feito.');
+  data = data || hojeISO();
+  if (data > hojeISO()) throw new OpError('A data do protesto não pode ser futura.');
+  return A().tx(async (t) => {
+    const r = await t.get('recompras', parcelaId), p = await t.get('parcelas', parcelaId);
+    if (!r || !p) throw new OpError('Recompra não encontrada.');
+    if (r.status === 'Pago') throw new OpError('Recompra já está paga.');
+    if (r.status === 'Renegociado') throw new OpError('Recompra renegociada: reabra-a antes de marcar protesto.');
+    const novo = r.status !== 'Protestado';
+    t.update('recompras', parcelaId, { status: 'Protestado', dtBaixa: novo ? data : (r.dtBaixa || data), dtProtesto: data, cartorio, protocoloProtesto: protocolo, obsProtesto: obs });
+    log(t, 'Protesto', { entidade: 'recompra', id: parcelaId, ...ctInfo(p.contrato), detalhe: `Recompra da parcela ${p.n}${p.nivel ? ' (acordo ' + p.nivel + ')' : ''} ${novo ? 'protestada' : '— dados do protesto atualizados'}: ${cartorio}${protocolo ? ', protocolo ' + protocolo : ''}, em ${fmtData(data)}${obs ? ' — ' + obs : ''}.` });
+  });
+}
+
+/* ------------------------------------------------------------------ OPERAÇÕES EM GRUPO (várias parcelas do mesmo contrato) */
+const rotRec = (p) => `Recompra — parcela ${p.n} (venc. ${fmtData(p.venc)})`;
+const chave = (it) => it.tipo + ':' + it.id;
+function dedup(itens) { const m = new Map(); for (const it of itens || []) m.set(chave(it), { tipo: it.tipo, id: it.id }); return [...m.values()]; }
+/** Lê (dentro da transação) os itens selecionados e valida que pertencem ao contrato. */
+async function lerItens(t, contrato, itens) {
+  const out = [];
+  for (const it of itens) {
+    const p = await t.get('parcelas', it.id);
+    if (!p || p.contrato !== contrato) throw new OpError('Um dos itens não pertence a este contrato (ou foi excluído).');
+    if (it.tipo === 'parcela') {
+      const rc = await t.get('recompras', it.id);
+      if (p.marc || rc) throw new OpError(`${rotuloParcela(p)} já foi baixada/recomprada por outro usuário. Atualize a seleção.`);
+      const saldo = saldoDoc(p); if (saldo <= 0) throw new OpError(`${rotuloParcela(p)} não tem saldo.`);
+      out.push({ ...it, p, d: p, saldo, rotulo: rotuloParcela(p) });
+    } else {
+      const r = await t.get('recompras', it.id); if (!r) throw new OpError('Recompra não encontrada.');
+      out.push({ ...it, p, d: r, saldo: r.status === 'Pago' ? 0 : Math.max(0, round2(valorRecDoc(r, p) - (r.valorPago || 0))), rotulo: rotRec(p) });
+    }
+  }
+  return out;
+}
+
+/** Quitação total de vários itens (parcelas em aberto e/ou recompras) com um único valor negociado.
+ *  valorFinal < soma dos saldos = desconto; > soma = acréscimo. A diferença é rateada proporcionalmente nos itens. */
+export async function quitarGrupo({ contrato, itens, valorFinal, data, forma = 'PIX', obs = '', motivo = '' }) {
+  need();
+  itens = dedup(itens); motivo = String(motivo || '').trim();
+  if (!itens.length) throw new OpError('Selecione ao menos um item.');
+  data = data || hojeISO();
+  if (data > hojeISO()) throw new OpError('A data do pagamento não pode ser futura.');
+  const finalC = toC(valorFinal); if (!(finalC > 0)) throw new OpError('Informe o valor a receber.');
+  return A().tx(async (t) => {
+    const rows = await lerItens(t, contrato, itens);
+    for (const x of rows) {
+      if (x.tipo === 'recompra' && (x.d.status === 'Pago' || x.d.status === 'Renegociado')) throw new OpError(`${x.rotulo} está ${x.d.status}: não dá para quitar.`);
+      if (x.saldo <= 0) throw new OpError(`${x.rotulo} não tem saldo.`);
+    }
+    const totC = rows.reduce((s, x) => s + toC(x.saldo), 0), diffC = finalC - totC;
+    if (diffC !== 0 && motivo.length < 3) throw new OpError('Informe o motivo do desconto/acréscimo.');
+    let usado = 0;
+    rows.forEach((x, i) => { x.ajC = i === rows.length - 1 ? diffC - usado : Math.round((diffC * toC(x.saldo)) / totC); usado += x.ajC; x.pagoC = toC(x.saldo) + x.ajC; if (x.pagoC <= 0) throw new OpError(`O desconto zeraria ${x.rotulo}. Reduza o desconto.`); });
+    const grupo = `PG${Date.now().toString(36).toUpperCase()}${rnd(3)}`; const resumo = [];
+    rows.forEach((x, i) => {
+      const pago = fromC(x.pagoC), aj = fromC(x.ajC);
+      if (x.tipo === 'parcela') {
+        const upd = { valorPago: round2((x.d.valorPago || 0) + pago), marc: 'Pago', dtPgto: data, dtBaixa: x.d.dtBaixa || data };
+        if (x.ajC !== 0) { upd.ajuste = round2((x.d.ajuste || 0) + aj); upd.ajusteMotivo = motivo; }
+        t.update('parcelas', x.id, upd);
+      } else {
+        const upd = { valorPago: round2((x.d.valorPago || 0) + pago), status: 'Pago', dtPgto: data, dtBaixa: x.d.dtBaixa || data };
+        if (x.ajC !== 0) { upd.encargos = round2((x.d.encargos || 0) + aj); upd.encargosMotivo = motivo; }
+        t.update('recompras', x.id, upd);
+      }
+      t.set('pagamentos', `${grupo}-${i + 1}`, { grupo, contrato, alvoTipo: x.tipo, alvoId: x.id, valor: pago, data, forma, obs, uid: app.user.uid, nome: app.user.nome, ts: { __ts: true }, estornado: false, rotulo: x.rotulo, quita: true });
+      resumo.push({ rotulo: x.rotulo, valor: pago, quita: true, resta: 0 });
+    });
+    const soma = fromC(totC), dif = fromC(diffC);
+    log(t, 'Pagamento', { entidade: 'contrato', id: contrato, ...ctInfo(contrato), detalhe: `Quitação total de ${rows.length} item(ns): ${brl(valorFinal)} em ${fmtData(data)} (${forma}) — saldos somavam ${brl(soma)}${diffC !== 0 ? `, ${descAjuste(dif)} (${motivo})` : ''}: ` + resumo.map((r) => r.rotulo).join('; ') + (obs ? ` — Obs: ${obs}` : '') });
+    return { grupo, resumo, total: valorFinal };
+  });
+}
+
+/** Recompra de várias parcelas de uma vez. */
+export async function recomprarGrupo({ contrato, ids, data = hojeISO() }) {
+  need(); const P = params();
+  ids = [...new Set(ids || [])]; if (!ids.length) throw new OpError('Selecione ao menos uma parcela.');
+  return A().tx(async (t) => {
+    const rows = await lerItens(t, contrato, ids.map((id) => ({ tipo: 'parcela', id })));
+    for (const x of rows) if (x.p.nivel >= P.maxNiveis) throw new OpError(`${x.rotulo}: no último nível de acordo a parcela só pode ser paga.`);
+    let total = 0;
+    for (const x of rows) {
+      t.update('parcelas', x.id, { marc: 'Recomprado', dtBaixa: data });
+      t.set('recompras', x.id, { parcela: x.id, ajuste: (x.d.valorPago || 0) > 0 ? x.saldo : null, status: null, juridico: 'Não', dtBaixa: null, dtPgto: null, valorPago: 0 });
+      total += x.saldo;
+    }
+    log(t, 'Recompra', { entidade: 'recompra', id: ids[0], ...ctInfo(contrato), detalhe: `${rows.length} parcela(s) recomprada(s) em grupo em ${fmtData(data)} — ${brl(total)}: ` + rows.map((x) => x.rotulo).join('; ') });
+    return { qtd: rows.length, total: round2(total) };
+  });
+}
+
+/** Renegocia várias parcelas/recompras (mesmo nível) num ÚNICO acordo. Parcelas em aberto são recompradas e marcadas Renegociado. */
+export async function renegociarGrupo({ contrato, itens, acordo, data = hojeISO() }) {
+  need(); const P = params();
+  itens = dedup(itens); if (!itens.length) throw new OpError('Selecione ao menos um item.');
+  return A().tx(async (t) => {
+    const rows = await lerItens(t, contrato, itens);
+    const niveis = [...new Set(rows.map((x) => x.p.nivel))];
+    if (niveis.length > 1) throw new OpError('Os itens são de níveis diferentes (parcela normal e acordo). Renegocie cada nível separadamente.');
+    const nivel = niveis[0] + 1;
+    checarAcordo({ ...acordo, nivel }, P);
+    if (await t.get('acordos', `${contrato}/N${nivel}`)) throw new OpError(`O contrato já tem o ${nivel}º acordo cadastrado. Cadastre apenas um acordo por nível ou exclua o existente.`);
+    let total = 0;
+    for (const x of rows) {
+      if (x.tipo === 'parcela') {
+        t.update('parcelas', x.id, { marc: 'Recomprado', dtBaixa: data });
+        t.set('recompras', x.id, { parcela: x.id, ajuste: (x.d.valorPago || 0) > 0 ? x.saldo : null, status: 'Renegociado', juridico: 'Não', dtBaixa: data, dtPgto: null, valorPago: 0 });
+      } else {
+        if (x.d.status === 'Pago') throw new OpError(`${x.rotulo} já está paga.`);
+        if (x.d.status !== 'Renegociado') t.update('recompras', x.id, { status: 'Renegociado', dtBaixa: x.d.dtBaixa || data });
+      }
+      total += x.saldo;
+    }
+    gravarAcordo(t, contrato, nivel, { ...acordo, dtReneg: acordo.dtReneg || data });
+    log(t, 'Renegociação', { entidade: 'acordo', id: `${contrato}/N${nivel}`, ...ctInfo(contrato), detalhe: `${nivel}º acordo em grupo (${rows.length} item(ns), ${brl(total)}): ${brl(acordo.valor)}${acordo.encargos ? ` (incluindo encargos de ${brl(acordo.encargos)})` : ''} em ${acordo.qtd}x, 1º venc. ${fmtData(acordo.primeiroVenc)} — ` + rows.map((x) => x.rotulo).join('; ') });
+    return { nivel, qtd: rows.length, total: round2(total) };
   });
 }

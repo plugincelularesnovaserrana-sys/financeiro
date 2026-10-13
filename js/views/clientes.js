@@ -40,6 +40,34 @@ export function createLista(ctx) {
 export function createDetalhe(ctx, id) {
   let el;
   const isAdmin = () => app.user.role === 'admin';
+  /* ---- seleção em grupo (quitar / recomprar / renegociar várias parcelas do mesmo contrato) */
+  const sel = new Set();
+  const selecionaveis = (M) => {
+    const out = [];
+    for (const p of M.pDe.get(id) || []) if (!p.marc && p.saldo > 0) out.push({ key: 'parcela:' + p.id, tipo: 'parcela', id: p.id, saldo: p.saldo, nivel: p.nivel, atraso: p.atraso, rec: false, status: p.status });
+    for (const r of M.rDe.get(id) || []) if (r.status !== 'Pago' && r.saldo > 0 && (r.status !== 'Renegociado' || r.acordoCad === 'NÃO')) out.push({ key: 'recompra:' + r.parcela, tipo: 'recompra', id: r.parcela, saldo: r.saldo, nivel: r.nivel, atraso: 0, rec: true, status: r.status });
+    return out;
+  };
+  const escolhidos = (M) => selecionaveis(M).filter((x) => sel.has(x.key));
+  function barra() {
+    const box = $('#sel-bar', el); if (!box) return;
+    const M = ctx.M(), all = selecionaveis(M), ch = all.filter((x) => sel.has(x.key)), P = M.P;
+    if (!all.length) { box.innerHTML = ''; return; }
+    const soma = ch.reduce((s, x) => s + x.saldo, 0);
+    const niveis = new Set(ch.map((x) => x.nivel));
+    const why = {
+      quitar: ch.some((x) => x.status === 'Renegociado') ? 'Há recompra renegociada na seleção — ela não pode ser quitada aqui.' : '',
+      recomprar: ch.some((x) => x.rec) ? 'Só parcelas em aberto podem ser recompradas (desmarque as recompras).' : ch.some((x) => x.nivel >= P.maxNiveis) ? 'No último nível de acordo a parcela só pode ser paga.' : '',
+      reneg: niveis.size > 1 ? 'Selecione itens do mesmo nível.' : ch.length && [...niveis][0] + 1 > P.maxNiveis ? 'Limite de níveis de acordo atingido.' : (M.aDe.get(id) || []).some((a) => ch.length && a.nivel === [...niveis][0] + 1) ? 'Já existe acordo no próximo nível deste contrato.' : '',
+    };
+    const b = (a, label, cls, w) => `<button class="btn sm ${cls}" data-a="${a}" ${!ch.length || w ? 'disabled' : ''} ${w ? `title="${esc(w)}"` : ''}>${label}</button>`;
+    box.innerHTML = `<div class="card" style="position:sticky;bottom:10px;z-index:15;margin-top:14px;box-shadow:0 6px 24px rgba(10,37,64,.18);border:1px solid #c3d5f5"><div class="row" style="gap:10px;flex-wrap:wrap;align-items:center">
+      <b>Seleção em grupo</b><span class="mute sm">${ch.length ? `${ch.length} item(ns) · saldo <b style="color:var(--ink)">${brl(soma)}</b>` : 'marque as parcelas abaixo (várias de uma vez)'}</span><span class="sp" style="flex:1"></span>
+      <button class="btn sm ghost" data-a="g-venc">Vencidas</button><button class="btn sm ghost" data-a="g-all">Todas em aberto</button><button class="btn sm ghost" data-a="g-none" ${ch.length ? '' : 'disabled'}>Limpar</button>
+      ${b('g-quit', 'Quitar total…', 'primary', why.quitar)}${b('g-rec', 'Recomprar…', '', why.recomprar)}${b('g-reneg', 'Renegociar…', '', why.reneg)}</div></div>`;
+    el.querySelectorAll('[data-selall]').forEach((cb) => { const ks = [...el.querySelectorAll(`[data-sel][data-grp="${cb.dataset.selall}"]`)]; cb.checked = ks.length > 0 && ks.every((k) => k.checked); });
+  }
+  const refresh = () => { update(); };
   function update() {
     const M = ctx.M(); const c = M.cBy.get(id);
     if (!c) { el.innerHTML = `<div class="card"><h3>Contrato não encontrado</h3><p class="mute">Ele pode ter sido excluído por outro usuário.</p><a href="#/clientes">← Voltar para clientes</a></div>`; return; }
@@ -52,25 +80,27 @@ export function createDetalhe(ctx, id) {
     const tblP = (nivel) => {
       const arr = ps.filter((p) => p.nivel === nivel);
       return `<div class="card flush" style="margin-top:14px"><div class="card-h"><h3>${nivel === 0 ? 'Parcelas do contrato' : nivel + 'º acordo — parcelas'}</h3><span class="mute sm">${arr.filter((p) => p.marc === 'Pago').length}/${arr.length} pagas</span></div>
-       <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Parc.</th><th>Vencimento</th><th class="r">Valor</th><th class="r">Pago</th><th class="r">Saldo</th><th>Status</th><th>Faixa</th><th></th></tr></thead><tbody>${arr.map((p) => {
+       <div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:30px"><input type="checkbox" data-selall="n${nivel}" title="Selecionar todas em aberto deste bloco"></th><th>Parc.</th><th>Vencimento</th><th class="r">Valor</th><th class="r">Pago</th><th class="r">Saldo</th><th>Status</th><th>Faixa</th><th></th></tr></thead><tbody>${arr.map((p) => {
         const a = [];
         if (!p.marc && p.saldo > 0) a.push(`<button class="btn sm primary" data-a="pay" data-id="${p.id}">Receber</button>`);
         if (!p.marc && p.saldo > 0 && p.nivel < P.maxNiveis) a.push(`<button class="btn sm" data-a="rec" data-id="${p.id}">Recomprar</button><button class="btn sm ghost" data-a="rend" data-id="${p.id}" title="Renegociação direta">Reneg.</button>`);
         if (!p.marc) a.push(`<button class="btn sm ghost" data-a="adjp" data-id="${p.id}" title="Desconto ou acréscimo na parcela">Desc./acrésc.</button>`);
         a.push(`<button class="btn sm ghost" data-a="edit" data-id="${p.id}">Editar</button>`);
         if (isAdmin() && (p.marc === 'Pago' || p.marc === 'Renegociado') && !ledgerP.has(p.id)) a.push(`<button class="btn sm ghost" data-a="reopen" data-id="${p.id}">Reabrir</button>`);
-        return `<tr class="${p.faixa === 'Crítico' ? 'rowbad' : ''}"><td>${p.n}</td><td>${fmtData(p.venc)}</td><td class="r">${brl(p.devido)}${p.ajuste ? `<br><span class="mute sm" title="${esc(p.ajusteMotivo || '')}">orig. ${brl(p.valor)} (${p.ajuste > 0 ? '+' : '−'}${brl(Math.abs(p.ajuste))})</span>` : ''}</td><td class="r">${p.pago ? brl(p.pago) : '—'}</td><td class="r">${p.saldo ? brl(p.saldo) : '—'}</td><td>${badge(p.status)} ${p.parcial ? badge('parcial', 'warn') : ''}${p.status === 'Vencido' ? ` <span class="mute sm">${p.atraso}d</span>` : ''}${p.rec ? ' <span class="mute sm">→ recompra</span>' : ''}</td><td>${badge(p.faixa)}</td><td class="acts">${a.join('')}</td></tr>`;
+        return `<tr class="${p.faixa === 'Crítico' ? 'rowbad' : ''}"><td>${!p.marc && p.saldo > 0 ? `<input type="checkbox" data-sel="parcela:${esc(p.id)}" data-grp="n${nivel}" ${sel.has('parcela:' + p.id) ? 'checked' : ''}>` : ''}</td><td>${p.n}</td><td>${fmtData(p.venc)}</td><td class="r">${brl(p.devido)}${p.ajuste ? `<br><span class="mute sm" title="${esc(p.ajusteMotivo || '')}">orig. ${brl(p.valor)} (${p.ajuste > 0 ? '+' : '−'}${brl(Math.abs(p.ajuste))})</span>` : ''}</td><td class="r">${p.pago ? brl(p.pago) : '—'}</td><td class="r">${p.saldo ? brl(p.saldo) : '—'}</td><td>${badge(p.status)} ${p.parcial ? badge('parcial', 'warn') : ''}${p.status === 'Vencido' ? ` <span class="mute sm">${p.atraso}d</span>` : ''}${p.rec ? ' <span class="mute sm">→ recompra</span>' : ''}</td><td>${badge(p.faixa)}</td><td class="acts">${a.join('')}</td></tr>`;
       }).join('')}</tbody></table></div></div>`;
     };
-    const tblR = rs.length ? `<div class="card flush" style="margin-top:14px"><div class="card-h"><h3>Recompras</h3></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Parcela</th><th class="r">Valor atual</th><th class="r">Saldo</th><th>Status</th><th>Alerta</th><th></th></tr></thead><tbody>${rs.map((r) => {
+    const tblR = rs.length ? `<div class="card flush" style="margin-top:14px"><div class="card-h"><h3>Recompras</h3></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:30px"><input type="checkbox" data-selall="rec" title="Selecionar todas as recompras em aberto"></th><th>Parcela</th><th class="r">Valor atual</th><th class="r">Saldo</th><th>Status</th><th>Alerta</th><th></th></tr></thead><tbody>${rs.map((r) => {
       const a = [];
       if (r.status !== 'Pago' && r.saldo > 0) a.push(`<button class="btn sm primary" data-a="payrec" data-id="${r.parcela}">Receber</button>`);
       if (r.status !== 'Pago' && r.nivel < P.maxNiveis) a.push(r.status === 'Renegociado' ? (r.acordoCad === 'NÃO' ? `<button class="btn sm" data-a="acordo" data-id="${r.parcela}">Cadastrar acordo</button>` : '') : `<button class="btn sm" data-a="acordo" data-id="${r.parcela}">Renegociar</button>`);
       if (!r.status) a.push(`<button class="btn sm ghost" data-a="prot" data-id="${r.parcela}">Protestar</button>`);
+      if (r.status === 'Protestado') a.push(`<button class="btn sm ghost" data-a="prot" data-id="${r.parcela}">Dados do protesto</button>`);
       if (r.status !== 'Pago') a.push(`<button class="btn sm ghost" data-a="adj" data-id="${r.parcela}">Encargos / desconto</button><button class="btn sm ghost" data-a="jur" data-id="${r.parcela}">${r.juridico === 'Sim' ? 'Tirar do jurídico' : 'Jurídico'}</button>`);
       if (r.status && r.status !== 'Pago') a.push(`<button class="btn sm ghost" data-a="rereab" data-id="${r.parcela}">Reabrir</button>`);
       if (isAdmin() && !r.status && !(r.valorPago > 0)) a.push(`<button class="btn sm ghost" data-a="undorec" data-id="${r.parcela}">Desfazer</button>`);
-      return `<tr><td>${r.nivel ? 'Acordo ' + r.nivel + ' · ' : ''}parc. ${r.nParc}<br><span class="mute sm">venc. ${fmtData(r.venc)} · recomprada ${fmtData(r.dtRecompra)}</span></td><td class="r">${brl(r.valorAtual)}<br><span class="mute sm">sug. ${brl(r.sugestao)}${r.encargos ? ` · enc. ${r.encargos > 0 ? '+' : '−'}${brl(Math.abs(r.encargos))}` : ''}</span></td><td class="r">${r.saldo ? brl(r.saldo) : '—'}</td><td>${badge(r.status || 'Pendente', r.status ? undefined : 'warn')} ${r.juridico === 'Sim' ? badge('jurídico', 'purple') : ''}${r.acordoCad === 'NÃO' ? ' ' + badge('sem acordo', 'bad') : ''}</td><td>${r.alerta && r.alerta !== 'OK' ? badge(r.alerta, 'warn') : ''}</td><td class="acts">${a.join('')}</td></tr>`;
+      const selOk = r.status !== 'Pago' && r.saldo > 0 && (r.status !== 'Renegociado' || r.acordoCad === 'NÃO');
+      return `<tr><td>${selOk ? `<input type="checkbox" data-sel="recompra:${esc(r.parcela)}" data-grp="rec" ${sel.has('recompra:' + r.parcela) ? 'checked' : ''}>` : ''}</td><td>${r.nivel ? 'Acordo ' + r.nivel + ' · ' : ''}parc. ${r.nParc}<br><span class="mute sm">venc. ${fmtData(r.venc)} · recomprada ${fmtData(r.dtRecompra)}</span></td><td class="r">${brl(r.valorAtual)}<br><span class="mute sm">sug. ${brl(r.sugestao)}${r.encargos ? ` · enc. ${r.encargos > 0 ? '+' : '−'}${brl(Math.abs(r.encargos))}` : ''}</span></td><td class="r">${r.saldo ? brl(r.saldo) : '—'}</td><td>${badge(r.status || 'Pendente', r.status ? undefined : 'warn')} ${r.juridico === 'Sim' ? badge('jurídico', 'purple') : ''}${r.acordoCad === 'NÃO' ? ' ' + badge('sem acordo', 'bad') : ''}${r.cartorio || r.dtProtesto ? `<br><span class="mute sm">protesto: ${esc(r.cartorio || '—')}${r.dtProtesto ? ' · ' + fmtData(r.dtProtesto) : ''}${r.protocoloProtesto ? ' · prot. ' + esc(r.protocoloProtesto) : ''}</span>` : ''}</td><td>${r.alerta && r.alerta !== 'OK' ? badge(r.alerta, 'warn') : ''}</td><td class="acts">${a.join('')}</td></tr>`;
     }).join('')}</tbody></table></div></div>` : '';
     const tblA = as.length ? `<div class="card flush" style="margin-top:14px"><div class="card-h"><h3>Acordos</h3></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Nível</th><th class="r">Valor</th><th>Parcelas</th><th>1º venc.</th><th>Renegociado em</th><th class="r">Dif. × recompra</th><th>Situação</th><th></th></tr></thead><tbody>${as.map((a) => `<tr><td>${a.nivel}º</td><td class="r">${brl(a.valor)}</td><td>${a.qtd}x</td><td>${fmtData(a.primeiroVenc)}</td><td>${fmtData(a.dtReneg)}</td><td class="r">${a.diferenca == null ? '—' : brl(a.diferenca)}</td><td>${badge(a.alerta)}</td><td class="acts">${isAdmin() ? `<button class="btn sm ghost" data-a="delac" data-n="${a.nivel}">Excluir</button>` : ''}</td></tr>`).join('')}</tbody></table></div></div>` : '';
     const grupos = new Map(); for (const g of pgs) { if (!grupos.has(g.grupo)) grupos.set(g.grupo, []); grupos.get(g.grupo).push(g); }
@@ -84,7 +114,10 @@ export function createDetalhe(ctx, id) {
       <div class="page-h"><div><h1>${esc(c.cliente)}</h1><p>${esc(c.id)} · ${esc(c.banco)} · referência ${esc(c.referencia || '—')} · ${c.qtd}x de ${brl(c.vParcela)} · 1º venc. ${fmtData(c.primeiroVenc)} ${c.obs ? '· ' + esc(c.obs) : ''}</p></div>
        <div class="row"><button class="btn primary" data-a="payc">${icon('cash', 16)} Receber pagamento</button><button class="btn" data-a="editc">Editar</button>${isAdmin() ? '<button class="btn ghost" data-a="delc" style="color:var(--bad)">Excluir</button>' : ''}</div></div>
       <div class="grid g4">${kp('Valor do contrato', brl(c.valorTotal), 'info')}${kp('Total recebido', brl(c.totalPago), 'ok')}${kp('Em aberto', brl(c.totalCarteiraAberta), 'warn')}${kp('Vencido', brl(c.valorVencido), ven ? 'bad' : 'ok')}</div>
+      <div id="sel-bar"></div>
       ${niveis.map(tblP).join('')}${tblR}${tblA}${tblG}${tblAnt}${tblL}`;
+    const ok = new Set(selecionaveis(M).map((x) => x.key)); for (const k of [...sel]) if (!ok.has(k)) sel.delete(k);
+    barra();
   }
   const A = {
     pay: (b) => MD.abrirPagamento({ contrato: id, alvoId: b.dataset.id }), payrec: (b) => MD.abrirPagamento({ contrato: id, alvoTipo: 'recompra', alvoId: b.dataset.id }), payc: () => MD.abrirPagamento({ contrato: id }),
@@ -93,11 +126,23 @@ export function createDetalhe(ctx, id) {
     acordo: (b) => MD.abrirAcordo(b.dataset.id), prot: (b) => MD.acaoProtestar(b.dataset.id), adj: (b) => MD.acaoAjustar(b.dataset.id), jur: (b) => MD.acaoJuridico(b.dataset.id), rereab: (b) => MD.acaoReabrirRecompra(b.dataset.id),
     undorec: async (b) => { if (await confirmDialog('Desfazer a recompra desta parcela?', { okLabel: 'Desfazer', danger: true })) { await ops.desfazerRecompra(b.dataset.id); toast('Recompra desfeita.', 'ok'); } },
     delac: async (b) => { if (await confirmDialog(`Excluir o ${b.dataset.n}º acordo e suas parcelas?`, { okLabel: 'Excluir', danger: true })) { await ops.excluirAcordo(id, +b.dataset.n); toast('Acordo excluído.', 'ok'); } },
+    'g-venc': () => { const M = ctx.M(); sel.clear(); selecionaveis(M).filter((x) => x.atraso > 0).forEach((x) => sel.add(x.key)); update(); },
+    'g-all': () => { const M = ctx.M(); sel.clear(); selecionaveis(M).forEach((x) => sel.add(x.key)); update(); },
+    'g-none': () => { sel.clear(); update(); },
+    'g-quit': () => MD.abrirQuitarGrupo(id, escolhidos(ctx.M()), () => { sel.clear(); update(); }),
+    'g-rec': () => MD.abrirRecomprarGrupo(id, escolhidos(ctx.M()), () => { sel.clear(); update(); }),
+    'g-reneg': () => MD.abrirRenegGrupo(id, escolhidos(ctx.M()), () => { sel.clear(); update(); }),
     estorno: (b) => MD.acaoEstornar(b.dataset.id), ant: () => MD.abrirAntecipacao(id), editc: () => MD.abrirEditarContrato(id),
     delant: async (b) => { if (await confirmDialog('Excluir esta antecipação?', { okLabel: 'Excluir', danger: true })) await ops.excluirAntecipacao(b.dataset.id); },
     delc: async () => { if (await confirmDialog(`EXCLUIR o contrato ${id} e TODOS os registros ligados (parcelas, recompras, acordos, pagamentos)? Esta ação não pode ser desfeita.`, { title: 'Excluir contrato', okLabel: 'Excluir definitivamente', danger: true })) { await ops.excluirContrato(id); toast('Contrato excluído.', 'ok'); ctx.go('#/clientes'); } },
   };
   return { title: 'Cliente', sub: '', detail: true,
-    mount(host) { el = host; el.addEventListener('click', safe(async (e) => { const b = e.target.closest('[data-a]'); if (b && A[b.dataset.a]) await A[b.dataset.a](b); })); update(); },
+    mount(host) { el = host; el.addEventListener('click', safe(async (e) => { const b = e.target.closest('[data-a]'); if (b && !b.disabled && A[b.dataset.a]) await A[b.dataset.a](b); }));
+      el.addEventListener('change', (e) => {
+        const cb = e.target.closest('[data-sel]'), all = e.target.closest('[data-selall]');
+        if (cb) { if (cb.checked) sel.add(cb.dataset.sel); else sel.delete(cb.dataset.sel); barra(); }
+        else if (all) { el.querySelectorAll(`[data-sel][data-grp="${all.dataset.selall}"]`).forEach((k) => { k.checked = all.checked; if (all.checked) sel.add(k.dataset.sel); else sel.delete(k.dataset.sel); }); barra(); }
+      });
+      update(); },
     update };
 }
