@@ -106,8 +106,13 @@ export async function aplicarImportacao({ dados, resumo }, modo, onProgress) {
   const a = app.adapter; if (app.user.role !== 'admin') throw new Error('Somente administradores podem importar.');
   if (modo === 'substituir') { onProgress?.('Apagando dados atuais…'); await a.wipeAll(['contratos', 'parcelas', 'recompras', 'acordos', 'antecipacoes', 'pagamentos', 'bancos', 'contadores']); }
   const ops = [];
-  for (const col of ['bancos', 'contratos', 'parcelas', 'recompras', 'acordos', 'antecipacoes', 'pagamentos', 'contadores', 'historico']) for (const d of dados[col] || []) { const { id, ...rest } = d; ops.push({ op: 'set', col, id, data: { ...rest, id } }); }
-  if (dados.config) ops.push({ op: 'set', col: 'config', id: 'params', data: dados.config });
+  // No modo Mesclar, bancos e parâmetros que já existem no sistema NÃO são sobrescritos (a planilha só acrescenta clientes/parcelas).
+  const bancosExistentes = new Set(store.list('bancos').map((b) => b.id));
+  for (const col of ['bancos', 'contratos', 'parcelas', 'recompras', 'acordos', 'antecipacoes', 'pagamentos', 'contadores', 'historico']) for (const d of dados[col] || []) {
+    if (modo === 'mesclar' && col === 'bancos' && bancosExistentes.has(d.id)) continue;
+    const { id, ...rest } = d; ops.push({ op: 'set', col, id, data: { ...rest, id } });
+  }
+  if (dados.config && !(modo === 'mesclar' && store.get('config', 'params'))) ops.push({ op: 'set', col: 'config', id: 'params', data: dados.config });
   onProgress?.(`Gravando ${ops.length} registros…`);
   a.onProgress = (d, t) => onProgress?.(`Gravando ${d}/${t}…`);
   await a.batch(ops);
