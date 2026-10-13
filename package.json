@@ -1,1 +1,7 @@
-{"type":"module"}
+{
+  "name": "controle-financeiro",
+  "private": true,
+  "type": "module",
+  "scripts": { "backup": "node scripts/backup.mjs", "test": "node scripts/test.mjs" },
+  "dependencies": { "firebase-admin": "^12.7.0" }
+}
