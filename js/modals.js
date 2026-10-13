@@ -6,6 +6,22 @@ import { modal, esc, $, $$, toast, parseBRL, brInput, confirmDialog, promptDialo
 
 const M = () => store.model();
 const field = (label, input, hint = '', cls = '') => `<div class="${cls}"><label class="f">${label}</label>${input}${hint ? `<div class="hint">${hint}</div>` : ''}</div>`;
+/** Campos de desconto (−) / acréscimo (+): tipo, valor e motivo. Prefixo p → #p-t, #p-v, #p-m. */
+const ajusteFields = (p, ini = {}) => `<div class="full"><label class="f">Desconto / acréscimo</label>
+  <div style="display:flex;gap:8px;flex-wrap:wrap"><select class="inp" id="${p}-t" style="flex:0 0 250px"><option value="0" ${!ini.t || ini.t === '0' ? 'selected' : ''}>Nenhum</option><option value="+" ${ini.t === '+' ? 'selected' : ''}>Acréscimo (+) — multa, juros, encargos</option><option value="-" ${ini.t === '-' ? 'selected' : ''}>Desconto (−)</option></select>
+  <input class="inp" id="${p}-v" inputmode="decimal" placeholder="valor R$" value="${ini.v ? brInput(ini.v) : ''}" style="flex:0 0 130px" ${!ini.t || ini.t === '0' ? 'disabled' : ''}>
+  <input class="inp" id="${p}-m" placeholder="motivo (obrigatório)" value="${esc(ini.m || '')}" style="flex:1 1 200px" ${!ini.t || ini.t === '0' ? 'disabled' : ''}></div></div>`;
+/** Lê os campos acima → { valor (com sinal, em R$), motivo }. */
+const lerAjuste = (p, el) => {
+  const t = $('#' + p + '-t', el).value; const v = parseBRL($('#' + p + '-v', el).value);
+  const abs = t === '0' || isNaN(v) ? 0 : Math.abs(round2(v));
+  return { valor: t === '-' ? -abs : abs, motivo: $('#' + p + '-m', el).value.trim() };
+};
+const ligarAjuste = (p, el, onChange) => {
+  const t = $('#' + p + '-t', el), v = $('#' + p + '-v', el), mo = $('#' + p + '-m', el);
+  const sync = () => { const off = t.value === '0'; v.disabled = off; mo.disabled = off; if (off) { v.value = ''; mo.value = ''; } };
+  t.addEventListener('change', () => { sync(); if (t.value !== '0') v.focus(); onChange(); }); v.addEventListener('input', onChange); sync();
+};
 const FORMAS = ['PIX', 'Boleto', 'Dinheiro', 'Cartão de débito', 'Cartão de crédito', 'Transferência', 'Depósito', 'Outro'];
 
 /* ----------------------------------------------------------------- escolher cliente */
@@ -39,6 +55,7 @@ export function abrirPagamento({ contrato, alvoTipo = 'parcela', alvoId, valor }
   const body = `<div class="alert info" style="margin-bottom:12px"><b>${esc(c.cliente)}</b> · ${esc(c.id)} · ${esc(c.banco)} · ref. ${esc(c.referencia || '—')}<br>Em aberto no contrato: <b>${brl(c.totalCarteiraAberta)}</b></div>
    <div class="fg">
     ${field('Receber referente a', `<select class="inp" id="pg-alvo">${lista.map((i) => `<option value="${i.tipo}:${i.id}" ${i === sel ? 'selected' : ''}>${esc(lab(i))}</option>`).join('')}</select>`, '', 'full')}
+    ${ajusteFields('pg-aj')}
     ${field('Valor recebido (R$)', `<input class="inp" id="pg-valor" inputmode="decimal" placeholder="0,00" value="${valor ? brInput(valor) : ''}">`, `<a href="#" id="pg-saldo">usar saldo do item</a> · pode ser parcial ou maior que a parcela`)}
     ${field('Data do pagamento', `<input class="inp" type="date" id="pg-data" value="${hojeISO()}" max="${hojeISO()}">`)}
     ${field('Forma', `<select class="inp" id="pg-forma">${FORMAS.map((f) => `<option>${f}</option>`).join('')}</select>`)}
@@ -48,24 +65,33 @@ export function abrirPagamento({ contrato, alvoTipo = 'parcela', alvoId, valor }
   const m = modal({ title: 'Receber pagamento', body, size: 'lg',
     actions: [{ label: 'Cancelar', cls: 'ghost' }, { label: 'Confirmar pagamento', cls: 'primary', id: 'pg-ok', close: false, onClick: async (api) => {
       const v = parseBRL($('#pg-valor', m.el).value); if (!(v > 0)) throw new Error('Informe o valor recebido.');
-      const [tipo, ...rest] = $('#pg-alvo', m.el).value.split(':');
-      const r = await ops.registrarPagamento({ contrato, alvoTipo: tipo, alvoId: rest.join(':'), valor: v, data: $('#pg-data', m.el).value, forma: $('#pg-forma', m.el).value, obs: $('#pg-obs', m.el).value.trim(), modo: $('#pg-modo', m.el).value });
+      const [tipo, ...rest] = $('#pg-alvo', m.el).value.split(':'); const aj = lerAjuste('pg-aj', m.el);
+      if (aj.valor !== 0 && aj.motivo.length < 3) throw new Error('Informe o motivo do desconto/acréscimo.');
+      const r = await ops.registrarPagamento({ contrato, alvoTipo: tipo, alvoId: rest.join(':'), valor: v, data: $('#pg-data', m.el).value, forma: $('#pg-forma', m.el).value, obs: $('#pg-obs', m.el).value.trim(), modo: $('#pg-modo', m.el).value, ajuste: aj.valor, ajusteMotivo: aj.motivo });
       api.close(); toast(`Pagamento de ${brl(v)} registrado.`, 'ok'); mostrarRecibo(c, r, { data: $('#pg-data', m.el).value, forma: $('#pg-forma', m.el).value });
     } }] });
   const prev = () => {
     const v = parseBRL($('#pg-valor', m.el).value); const [tipo, ...rest] = $('#pg-alvo', m.el).value.split(':'); const id = rest.join(':');
-    const mm = M(); const modo = $('#pg-modo', m.el).value;
-    const fila = montarFila(mm.pDe.get(contrato) || [], tipo, id, tipo === 'recompra' ? mm.rBy.get(id) : null, modo);
-    const box = $('#pg-prev', m.el);
-    if (!(v > 0)) { box.innerHTML = '<span class="mute">Informe o valor para ver como será distribuído.</span>'; return; }
+    const mm = M(); const modo = $('#pg-modo', m.el).value; const aj = lerAjuste('pg-aj', m.el).valor;
+    let parcs = mm.pDe.get(contrato) || [], rec = tipo === 'recompra' ? mm.rBy.get(id) : null;
+    if (aj) { if (rec) rec = { ...rec, saldo: round2(rec.saldo + aj) }; else parcs = parcs.map((p) => (p.id === id ? { ...p, saldo: round2(p.saldo + aj) } : p)); }
+    const fila = montarFila(parcs, tipo, id, rec, modo);
+    const box = $('#pg-prev', m.el); const alvoOk = fila.length > 0 && fila[0].id === id;
+    if (!alvoOk) { box.innerHTML = '<span class="bad">O desconto deixa o item sem saldo. Reduza o desconto (para quitar, informe o valor recebido).</span>'; $('#pg-ok', m.el).disabled = true; return; }
+    const alvoSaldo = fromC(fila[0].saldoC);
+    const ajTxt = aj ? `<div class="mute sm" style="margin-bottom:4px">${aj > 0 ? 'Acréscimo' : 'Desconto'} de ${brl(Math.abs(aj))} no item → saldo a receber <b>${brl(alvoSaldo)}</b></div>` : '';
+    if (!(v > 0)) { box.innerHTML = ajTxt + '<span class="mute">Informe o valor para ver como será distribuído.</span>'; return; }
     const { aloc, restoC } = ratear(toC(v), fila);
-    box.innerHTML = `<b>Distribuição do pagamento de ${brl(v)}:</b><ul style="margin:6px 0 0;padding-left:18px">${aloc.map((a) => { const it = fila.find((f) => f.key === a.key); return `<li>${esc(it.rotulo)} — <b>${brl(fromC(a.valorC))}</b> ${a.quita ? badge('quitada', 'ok') : badge('abatimento · resta ' + brl(fromC(a.restaC)), 'warn')}</li>`; }).join('')}</ul>${restoC > 0 ? `<div style="color:var(--bad);margin-top:6px"><b>⚠ Excede em ${brl(fromC(restoC))} o saldo disponível.</b></div>` : ''}`;
+    box.innerHTML = ajTxt + `<b>Distribuição do pagamento de ${brl(v)}:</b><ul style="margin:6px 0 0;padding-left:18px">${aloc.map((a) => { const it = fila.find((f) => f.key === a.key); return `<li>${esc(it.rotulo)} — <b>${brl(fromC(a.valorC))}</b> ${a.quita ? badge('quitada', 'ok') : badge('abatimento · resta ' + brl(fromC(a.restaC)), 'warn')}</li>`; }).join('')}</ul>${restoC > 0 ? `<div style="color:var(--bad);margin-top:6px"><b>⚠ Excede em ${brl(fromC(restoC))} o saldo disponível.</b></div>` : ''}`;
     $('#pg-ok', m.el).disabled = restoC > 0;
   };
-  const setSaldo = () => { const [tipo, ...rest] = $('#pg-alvo', m.el).value.split(':'); const it = lista.find((i) => i.tipo === tipo && i.id === rest.join(':')); $('#pg-valor', m.el).value = brInput(it.saldo); prev(); };
+  let auto = false;
+  const setSaldo = () => { const [tipo, ...rest] = $('#pg-alvo', m.el).value.split(':'); const it = lista.find((i) => i.tipo === tipo && i.id === rest.join(':')); $('#pg-valor', m.el).value = brInput(Math.max(0, round2(it.saldo + lerAjuste('pg-aj', m.el).valor))); auto = true; prev(); };
   $('#pg-saldo', m.el).onclick = (e) => { e.preventDefault(); setSaldo(); };
+  ligarAjuste('pg-aj', m.el, () => { if (auto) setSaldo(); else prev(); });
+  $('#pg-valor', m.el).addEventListener('input', () => { auto = false; });
   ['pg-valor', 'pg-alvo', 'pg-modo'].forEach((id) => $('#' + id, m.el).addEventListener('input', prev));
-  $('#pg-alvo', m.el).addEventListener('change', () => { if (!$('#pg-valor', m.el).value) setSaldo(); else prev(); });
+  $('#pg-alvo', m.el).addEventListener('change', () => { if (!$('#pg-valor', m.el).value || auto) setSaldo(); else prev(); });
   if (!valor) setSaldo(); else prev();
   $('#pg-valor', m.el).addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#pg-ok', m.el).click(); });
 }
@@ -134,6 +160,18 @@ export function abrirEditarParcela(id) {
     actions: [{ label: 'Cancelar', cls: 'ghost' }, { label: 'Salvar', cls: 'primary', onClick: async () => { await ops.editarParcela(id, { venc: $('#ep-venc', m.el).value, valor: trava ? null : parseBRL($('#ep-valor', m.el).value) }); toast('Parcela atualizada.', 'ok'); } }] });
 }
 
+export function abrirAjusteParcela(id) {
+  const p = M().pBy.get(id); if (!p) return;
+  if (p.marc) return toast(`A parcela já está ${p.marc}: não dá para alterar o valor devido.`, 'warn');
+  const m = modal({ title: `Desconto / acréscimo — parcela ${p.n}${p.nivel ? ' (acordo ' + p.nivel + ')' : ''}`, size: 'sm',
+    body: `<div class="alert info"><b>${esc(p.cliente)}</b> · venc. ${fmtData(p.venc)}<br>Valor original <b>${brl(p.valor)}</b>${p.parcialPago > 0 ? ` · já pago ${brl(p.parcialPago)}` : ''}</div><div class="fg" style="margin-top:10px">${ajusteFields('aj', { t: p.ajuste > 0 ? '+' : p.ajuste < 0 ? '-' : '0', v: Math.abs(p.ajuste || 0), m: p.ajusteMotivo })}</div><div class="preview" id="aj-prev"></div>`,
+    actions: [{ label: 'Cancelar', cls: 'ghost' }, { label: 'Salvar', cls: 'primary', onClick: async () => {
+      const a = lerAjuste('aj', m.el); await ops.ajustarParcela(id, { ajuste: a.valor, motivo: a.motivo }); toast(a.valor ? 'Valor da parcela ajustado.' : 'Ajuste removido.', 'ok');
+    } }] });
+  const prev = () => { const a = lerAjuste('aj', m.el).valor, dev = round2(p.valor + a); $('#aj-prev', m.el).innerHTML = `Valor devido: <b>${brl(dev)}</b>${p.parcialPago > 0 ? ` · saldo <b>${brl(Math.max(0, round2(dev - p.parcialPago)))}</b>` : ''}${a ? ` <span class="mute">(${a > 0 ? '+' : '−'}${brl(Math.abs(a))})</span>` : ''}`; };
+  ligarAjuste('aj', m.el, prev); prev();
+}
+
 /* ----------------------------------------------------------------- recompra / acordos */
 export async function acaoRecomprar(parcelaId) {
   const p = M().pBy.get(parcelaId); if (!p) return;
@@ -142,7 +180,7 @@ export async function acaoRecomprar(parcelaId) {
 }
 export async function acaoRenegociarDireto(parcelaId) {
   const p = M().pBy.get(parcelaId); if (!p) return;
-  if (await confirmDialog(`Marcar a parcela ${p.n} de ${p.cliente} (${brl(p.valor)}) como RENEGOCIADA direto?\n\nEla deixa de contar como inadimplente.`, { title: 'Renegociação direta', okLabel: 'Marcar' })) { await ops.renegociarDireto(parcelaId); toast('Parcela renegociada.', 'ok'); }
+  if (await confirmDialog(`Marcar a parcela ${p.n} de ${p.cliente} (${brl(p.devido)}) como RENEGOCIADA direto?\n\nEla deixa de contar como inadimplente.`, { title: 'Renegociação direta', okLabel: 'Marcar' })) { await ops.renegociarDireto(parcelaId); toast('Parcela renegociada.', 'ok'); }
 }
 export async function acaoProtestar(parcelaId) {
   const r = M().rBy.get(parcelaId); if (!r) return;
@@ -152,10 +190,19 @@ export async function acaoReabrirRecompra(parcelaId) {
   if (await confirmDialog('Reabrir esta recompra (volta a ficar sem resolução)?', { title: 'Reabrir recompra', okLabel: 'Reabrir' })) { await ops.resolverRecompra(parcelaId, null); toast('Recompra reaberta.', 'ok'); }
 }
 export async function acaoJuridico(parcelaId) { await ops.alternarJuridico(parcelaId); toast('Marcação jurídica atualizada.', 'ok'); }
-export async function acaoAjustar(parcelaId) {
+export function acaoAjustar(parcelaId) { // encargos / desconto da recompra
   const r = M().rBy.get(parcelaId); if (!r) return;
-  const v = await promptDialog(`Valor atualizado da recompra (original ${brl(r.valorOriginal)}; sugestão com multa e juros ${brl(r.sugestao)}). Deixe em branco para voltar ao valor original.`, { title: 'Ajustar valor da recompra', value: brInput(r.ajuste ?? r.sugestao), okLabel: 'Salvar' });
-  if (v == null) return; await ops.ajustarRecompra(parcelaId, v.trim() === '' ? null : parseBRL(v)); toast('Valor ajustado.', 'ok');
+  if (r.status === 'Pago') return toast('Recompra já paga.', 'warn');
+  const m = modal({ title: `Encargos da recompra — parcela ${r.nParc}${r.nivel ? ' (acordo ' + r.nivel + ')' : ''}`, size: 'sm',
+    body: `<div class="alert info"><b>${esc(r.cliente)}</b> · venc. ${fmtData(r.venc)}<br>Valor da parcela <b>${brl(r.valorBase)}</b>${r.valorPago > 0 ? ` · já pago ${brl(r.pagoRec)}` : ''}<br>Sugestão com multa e juros: <b>${brl(r.sugestao)}</b> (<a href="#" id="en-sug">aplicar</a>)</div>
+      <div class="fg" style="margin-top:10px">${ajusteFields('en', { t: r.encargos > 0 ? '+' : r.encargos < 0 ? '-' : '0', v: Math.abs(r.encargos || 0), m: r.encargosMotivo })}</div><div class="preview" id="en-prev"></div>`,
+    actions: [{ label: 'Cancelar', cls: 'ghost' }, { label: 'Salvar', cls: 'primary', onClick: async () => {
+      const a = lerAjuste('en', m.el); await ops.ajustarEncargosRecompra(parcelaId, { encargos: a.valor, motivo: a.motivo }); toast(a.valor ? 'Encargos da recompra salvos.' : 'Encargos removidos.', 'ok');
+    } }] });
+  const prev = () => { const a = lerAjuste('en', m.el).valor; $('#en-prev', m.el).innerHTML = `Valor da recompra: <b>${brl(round2(r.valorBase + a))}</b>${a ? ` <span class="mute">(${a > 0 ? '+' : '−'}${brl(Math.abs(a))})</span>` : ''}`; };
+  ligarAjuste('en', m.el, prev);
+  $('#en-sug', m.el).onclick = (e) => { e.preventDefault(); const d = round2((r.sugestao || 0) - r.valorBase); $('#en-t', m.el).value = d >= 0 ? '+' : '-'; $('#en-t', m.el).dispatchEvent(new Event('change')); $('#en-v', m.el).value = brInput(Math.abs(d)); if (!$('#en-m', m.el).value) $('#en-m', m.el).value = 'Multa e juros de mora'; prev(); };
+  prev();
 }
 
 /** Renegociar uma recompra (cria o acordo) ou só cadastrar o acordo de uma recompra já marcada Renegociada. */
@@ -164,21 +211,23 @@ export function abrirAcordo(parcelaId) {
   const nivel = r.nivel + 1; const soCadastro = r.status === 'Renegociado';
   if (nivel > P.maxNiveis) return toast('Limite de níveis de acordo atingido.', 'warn');
   const m = modal({ title: `${nivel}º acordo — ${r.cliente}`, size: 'lg', body: `<div class="alert info">Recompra da parcela ${r.nParc}${r.nivel ? ' (acordo ' + r.nivel + ')' : ''} · valor atual <b>${brl(r.valorAtual)}</b>${r.saldo !== r.valorAtual ? ` · saldo ${brl(r.saldo)}` : ''} · sugestão com multa e juros <b>${brl(r.sugestao)}</b></div><div class="fg">
-    ${field('Valor do acordo (R$)', `<input class="inp" id="ac-valor" value="${brInput(r.saldo)}">`, 'Pode ser o saldo da recompra, a sugestão com multa/juros ou outro valor negociado.')}
+    ${field('Valor base do acordo (R$)', `<input class="inp" id="ac-valor" value="${brInput(r.saldo)}">`, 'Saldo da recompra ou outro valor negociado (desconto).')}
+    ${field('Encargos do acordo (R$)', `<input class="inp" id="ac-enc" inputmode="decimal" placeholder="0,00">`, 'IOF, juros, tarifas… somados ao valor base. Pode ser negativo (desconto).')}
     ${field('Qtd. de parcelas', `<input class="inp" type="number" id="ac-qtd" min="1" max="${P.maxParcAcordo}" value="3">`, `máx. ${P.maxParcAcordo}`)}
     ${field('1º vencimento', `<input class="inp" type="date" id="ac-venc" value="${addDays(hojeISO(), 30)}">`)}
     ${field('Data da renegociação', `<input class="inp" type="date" id="ac-data" value="${hojeISO()}" max="${hojeISO()}">`)}
     ${field('Observações', `<input class="inp" id="ac-obs">`, '', 'full')}</div><div class="preview" id="ac-prev"></div>`,
     actions: [{ label: 'Cancelar', cls: 'ghost' }, { label: soCadastro ? 'Cadastrar acordo' : 'Renegociar', cls: 'primary', onClick: async () => {
-      const a = { valor: parseBRL($('#ac-valor', m.el).value), qtd: +$('#ac-qtd', m.el).value, primeiroVenc: $('#ac-venc', m.el).value, dtReneg: $('#ac-data', m.el).value, obs: $('#ac-obs', m.el).value };
+      const base = parseBRL($('#ac-valor', m.el).value), enc = parseBRL($('#ac-enc', m.el).value) || 0;
+      const a = { valor: round2(base + enc), encargos: round2(enc), qtd: +$('#ac-qtd', m.el).value, primeiroVenc: $('#ac-venc', m.el).value, dtReneg: $('#ac-data', m.el).value, obs: $('#ac-obs', m.el).value };
       if (soCadastro) await ops.criarAcordo(r.contrato, nivel, a); else await ops.renegociarRecompra(parcelaId, a, a.dtReneg);
       toast(`${nivel}º acordo cadastrado: ${a.qtd} parcelas geradas.`, 'ok');
     } }] });
   const prev = () => {
-    const v = parseBRL($('#ac-valor', m.el).value), q = +$('#ac-qtd', m.el).value, d = $('#ac-venc', m.el).value; const box = $('#ac-prev', m.el);
+    const enc = parseBRL($('#ac-enc', m.el).value) || 0, v = round2((parseBRL($('#ac-valor', m.el).value) || 0) + enc), q = +$('#ac-qtd', m.el).value, d = $('#ac-venc', m.el).value; const box = $('#ac-prev', m.el);
     if (!(v > 0) || !(q > 0) || !d) { box.innerHTML = '<span class="mute">Preencha os dados do acordo.</span>'; return; }
     const arr = ops.dividirParcelas(v, q); const dif = round2(v - r.valorAtual);
-    box.innerHTML = `<b>${q} parcelas</b> de ${brl(arr[0])}${arr[q - 1] !== arr[0] ? ` (última ${brl(arr[q - 1])})` : ''} · de ${fmtData(d)} a ${fmtData(addMonths(d, q - 1))}<br><span class="mute">Diferença acordo × recompra: ${dif >= 0 ? '+' : ''}${brl(dif)} ${dif < 0 ? '(desconto concedido)' : ''}</span>`;
+    box.innerHTML = `Valor do acordo: <b>${brl(v)}</b>${enc ? ` (base + ${brl(enc)} de encargos)` : ''}<br><b>${q} parcelas</b> de ${brl(arr[0])}${arr[q - 1] !== arr[0] ? ` (última ${brl(arr[q - 1])})` : ''} · de ${fmtData(d)} a ${fmtData(addMonths(d, q - 1))}<br><span class="mute">Diferença acordo × recompra: ${dif >= 0 ? '+' : ''}${brl(dif)} ${dif < 0 ? '(desconto concedido)' : ''}</span>`;
   };
   $$('input', m.el).forEach((x) => x.addEventListener('input', prev)); prev();
 }

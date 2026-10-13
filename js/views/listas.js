@@ -21,11 +21,12 @@ function makeList(cfg) {
     return { title: cfg.title, sub: cfg.sub, update,
       mount(host) {
         el = host; const M = ctx.M();
-        el.innerHTML = `${cfg.pre ? cfg.pre(M) : ''}<div class="filters"><input class="inp grow" id="ls-q" placeholder="${cfg.placeholder || 'Buscar…'}" value="${esc(st.q)}">
+        el.innerHTML = `${cfg.pre ? cfg.pre(M) : ''}<div class="filters"><div style="position:relative;flex:1;min-width:220px"><input class="inp" style="width:100%" id="ls-q" autocomplete="off" placeholder="${cfg.placeholder || 'Buscar…'}" value="${esc(st.q)}"><div class="results hide" id="ls-s"></div></div>
           <select class="inp" id="ls-b"><option value="">Todos os bancos</option>${M.bancos.map((x) => `<option ${st.banco === x.nome ? 'selected' : ''}>${esc(x.nome)}</option>`).join('')}</select>
           ${(cfg.filters || []).map((f) => `<select class="inp" data-f="${f.key}"><option value="">${f.label}</option>${f.options(M).map((o) => `<option value="${esc(o.v ?? o)}" ${String(st[f.key]) === String(o.v ?? o) ? 'selected' : ''}>${esc(o.l ?? o)}</option>`).join('')}</select>`).join('')}
           ${(cfg.dates ? `<input class="inp" type="date" id="ls-d1" title="de" value="${st.d1 || ''}"><input class="inp" type="date" id="ls-d2" title="até" value="${st.d2 || ''}">` : '')}
           <button class="btn" id="ls-csv">CSV</button>${cfg.buttons ? cfg.buttons : ''}</div>${cfg.summary ? '<div class="alert info" id="ls-sum"></div>' : ''}<div class="card flush" id="ls-t"></div>`;
+        suggestClientes(el, ctx, st, cfg);
         $('#ls-q', el).addEventListener('input', (e) => { st.q = e.target.value; update(); }); $('#ls-b', el).addEventListener('input', (e) => { st.banco = e.target.value; update(); });
         el.querySelectorAll('[data-f]').forEach((s) => s.addEventListener('input', () => { st[s.dataset.f] = s.value; update(); }));
         if (cfg.dates) ['d1', 'd2'].forEach((k) => $('#ls-' + k, el).addEventListener('input', (e) => { st[k] = e.target.value; update(); }));
@@ -34,6 +35,31 @@ function makeList(cfg) {
         update();
       } };
   };
+}
+/** Sugestões de clientes sob o campo de busca: atualiza a cada letra; clique (ou ↑↓ + Enter) abre o cliente. */
+function suggestClientes(el, ctx, st, cfg) {
+  const inp = $('#ls-q', el), box = $('#ls-s', el); let sl = [], hl = -1;
+  const render = () => {
+    const q = normalize(inp.value.trim()); if (!q) { box.classList.add('hide'); return; }
+    const M = ctx.M(), cnt = new Map();
+    for (const r of cfg.rows(M, st)) { const id = r.contrato || r.id; if (id) cnt.set(id, (cnt.get(id) || 0) + 1); }
+    const t = esc(cfg.title.toLowerCase());
+    sl = M.contratos.filter((c) => (!st.banco || c.banco === st.banco) && normalize(c.cliente + ' ' + (c.referencia || '') + ' ' + c.id).includes(q))
+      .map((c) => ({ id: c.id, cliente: c.cliente, banco: c.banco, ref: c.referencia, n: cnt.get(c.id) || 0 }))
+      .sort((a, b) => (b.n > 0) - (a.n > 0) || (normalize(a.cliente).startsWith(q) ? 0 : 1) - (normalize(b.cliente).startsWith(q) ? 0 : 1) || a.cliente.localeCompare(b.cliente)).slice(0, 8); hl = -1;
+    box.innerHTML = sl.length ? sl.map((c) => `<a data-id="${esc(c.id)}"><span><b>${esc(c.cliente)}</b><br><span class="mute sm">${esc(c.id)} · ${esc(c.banco)} · ref. ${esc(c.ref || '—')}</span></span><span class="sm mute" style="text-align:right">${c.n ? `<b>${c.n}</b> ${t}` : `sem ${t}`}</span></a>`).join('') : '<div class="none">Nenhum cliente encontrado</div>';
+    box.classList.remove('hide');
+  };
+  const open = (id) => { box.classList.add('hide'); ctx.go('#/cliente/' + id); };
+  inp.addEventListener('input', render); inp.addEventListener('focus', render); inp.addEventListener('blur', () => setTimeout(() => box.classList.add('hide'), 120));
+  inp.addEventListener('keydown', (e) => {
+    const as = [...box.querySelectorAll('a')];
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); if (box.classList.contains('hide')) render(); hl = Math.max(0, Math.min(as.length - 1, hl + (e.key === 'ArrowDown' ? 1 : -1))); as.forEach((a, i) => a.classList.toggle('hl', i === hl)); }
+    else if (e.key === 'Enter' && hl >= 0 && sl[hl]) { e.preventDefault(); open(sl[hl].id); }
+    else if (e.key === 'Escape') box.classList.add('hide');
+  });
+  box.addEventListener('mousedown', (e) => e.preventDefault());
+  box.addEventListener('click', (e) => { const a = e.target.closest('a[data-id]'); if (a) open(a.dataset.id); });
 }
 const goCli = (r, ctx) => ctx.go('#/cliente/' + (r.contrato || r.id));
 const payBtn = '<button class="btn sm primary" data-act="pay">Receber</button>';
@@ -47,19 +73,19 @@ export const createParcelas = makeList({
     { key: 'nivel', label: 'Todos os níveis', options: () => [{ v: 0, l: 'Normais' }, { v: 1, l: '1º acordo' }, { v: 2, l: '2º acordo' }], test: (r, v) => r.nivel === +v },
     { key: 'faixa', label: 'Qualquer faixa', options: () => ['Régua', 'Crítico'], test: (r, v) => r.faixa === v },
   ],
-  summary: (rows) => `<b>${rows.length}</b> parcela(s) · valor ${brl(rows.reduce((s, r) => s + r.valor, 0))} · saldo em aberto <b>${brl(rows.reduce((s, r) => s + r.saldo, 0))}</b>`,
+  summary: (rows) => `<b>${rows.length}</b> parcela(s) · valor devido ${brl(rows.reduce((s, r) => s + r.devido, 0))} · saldo em aberto <b>${brl(rows.reduce((s, r) => s + r.saldo, 0))}</b>`,
   cols: [
     { key: 'cli', label: 'Cliente', v: (p) => p.cliente, f: (p) => `<b>${esc(p.cliente)}</b><br><span class="mute sm">${esc(p.contrato)} · ${esc(p.banco)}</span>` },
     { key: 'orig', label: 'Origem', v: (p) => p.origem }, { key: 'n', label: 'Parc.', v: (p) => p.n },
-    { key: 'venc', label: 'Vencimento', v: (p) => p.venc, f: (p) => fmtData(p.venc) }, { key: 'val', label: 'Valor', align: 'r', v: (p) => p.valor, f: (p) => brl(p.valor) },
+    { key: 'venc', label: 'Vencimento', v: (p) => p.venc, f: (p) => fmtData(p.venc) }, { key: 'val', label: 'Valor', align: 'r', v: (p) => p.devido, f: (p) => brl(p.devido) + (p.ajuste ? `<br><span class="mute sm" title="${esc(p.ajusteMotivo || '')}">orig. ${brl(p.valor)} (${p.ajuste > 0 ? '+' : '−'}${brl(Math.abs(p.ajuste))})</span>` : '') },
     { key: 'pago', label: 'Pago', align: 'r', v: (p) => p.pago, f: (p) => (p.pago ? brl(p.pago) : '—') }, { key: 'saldo', label: 'Saldo', align: 'r', v: (p) => p.saldo, f: (p) => (p.saldo ? brl(p.saldo) : '—') },
     { key: 'st', label: 'Status', v: (p) => p.status, f: (p) => badge(p.status) + (p.parcial ? ' ' + badge('parcial', 'warn') : '') }, { key: 'fx', label: 'Faixa', v: (p) => p.faixa, f: (p) => badge(p.faixa) },
     { key: 'dt', label: 'Data pgto', v: (p) => p.dtPgto, f: (p) => fmtData(p.dtPgto) },
     { key: 'al', label: 'Alerta', v: (p) => p.alerta, f: (p) => (p.alerta && p.alerta !== 'OK' ? badge(p.alerta, 'warn') : '') },
-    { key: 'a', label: '', v: () => '', f: (p) => (!p.marc && p.saldo > 0 ? payBtn : ''), cls: 'acts' },
+    { key: 'a', label: '', v: () => '', f: (p) => (!p.marc && p.saldo > 0 ? payBtn + '<button class="btn sm ghost" data-act="adjp">Desc./acrésc.</button>' : ''), cls: 'acts' },
   ],
   rowClass: (p) => (p.faixa === 'Crítico' ? 'rowbad' : ''), onRow: goCli,
-  onAction: (a, p) => { if (a === 'pay') MD.abrirPagamento({ contrato: p.contrato, alvoId: p.id }); },
+  onAction: (a, p) => { if (a === 'pay') MD.abrirPagamento({ contrato: p.contrato, alvoId: p.id }); if (a === 'adjp') MD.abrirAjusteParcela(p.id); },
 });
 
 /* ------------------------------------------------------------ Pagamentos (livro de caixa) */
@@ -92,11 +118,11 @@ export const createRecompras = makeList({
   cols: [
     { key: 'cli', label: 'Cliente', v: (r) => r.cliente, f: (r) => `<b>${esc(r.cliente)}</b><br><span class="mute sm">${esc(r.contrato)} · ${esc(r.banco)}</span>` },
     { key: 'p', label: 'Parcela', v: (r) => r.nParc, f: (r) => (r.nivel ? 'Acordo ' + r.nivel + ' · ' : '') + 'parc. ' + r.nParc }, { key: 'v', label: 'Vencimento', v: (r) => r.venc, f: (r) => fmtData(r.venc) },
-    { key: 'dr', label: 'Recomprada em', v: (r) => r.dtRecompra, f: (r) => fmtData(r.dtRecompra) }, { key: 'va', label: 'Valor atual', align: 'r', v: (r) => r.valorAtual, f: (r) => brl(r.valorAtual) },
+    { key: 'dr', label: 'Recomprada em', v: (r) => r.dtRecompra, f: (r) => fmtData(r.dtRecompra) }, { key: 'va', label: 'Valor atual', align: 'r', v: (r) => r.valorAtual, f: (r) => brl(r.valorAtual) + (r.encargos ? `<br><span class="mute sm" title="${esc(r.encargosMotivo || '')}">enc. ${r.encargos > 0 ? '+' : '−'}${brl(Math.abs(r.encargos))}</span>` : '') },
     { key: 'sg', label: 'Sugestão c/ multa+juros', align: 'r', v: (r) => r.sugestao, f: (r) => brl(r.sugestao) }, { key: 'sd', label: 'Saldo', align: 'r', v: (r) => r.saldo, f: (r) => (r.saldo ? brl(r.saldo) : '—') },
     { key: 'st', label: 'Status', v: (r) => r.status || 'Pendente', f: (r) => badge(r.status || 'Pendente', r.status ? undefined : 'warn') + (r.juridico === 'Sim' ? ' ' + badge('jurídico', 'purple') : '') + (r.acordoCad === 'NÃO' ? ' ' + badge('sem acordo', 'bad') : '') },
     { key: 'al', label: 'Alerta', v: (r) => r.alerta, f: (r) => (r.alerta && r.alerta !== 'OK' ? badge(r.alerta, 'warn') : '') },
-    { key: 'a', label: '', v: () => '', cls: 'acts', f: (r) => [r.status !== 'Pago' && r.saldo > 0 ? '<button class="btn sm primary" data-act="pay">Receber</button>' : '', r.status !== 'Pago' && r.nivel < app.store.model().P.maxNiveis && (r.status !== 'Renegociado' || r.acordoCad === 'NÃO') ? `<button class="btn sm" data-act="reneg">${r.status === 'Renegociado' ? 'Cadastrar acordo' : 'Renegociar'}</button>` : '', !r.status ? '<button class="btn sm ghost" data-act="prot">Protestar</button>' : '', r.status !== 'Pago' ? `<button class="btn sm ghost" data-act="jur">${r.juridico === 'Sim' ? '↩ jurídico' : 'Jurídico'}</button><button class="btn sm ghost" data-act="adj">Ajustar</button>` : ''].join('') },
+    { key: 'a', label: '', v: () => '', cls: 'acts', f: (r) => [r.status !== 'Pago' && r.saldo > 0 ? '<button class="btn sm primary" data-act="pay">Receber</button>' : '', r.status !== 'Pago' && r.nivel < app.store.model().P.maxNiveis && (r.status !== 'Renegociado' || r.acordoCad === 'NÃO') ? `<button class="btn sm" data-act="reneg">${r.status === 'Renegociado' ? 'Cadastrar acordo' : 'Renegociar'}</button>` : '', !r.status ? '<button class="btn sm ghost" data-act="prot">Protestar</button>' : '', r.status !== 'Pago' ? `<button class="btn sm ghost" data-act="jur">${r.juridico === 'Sim' ? '↩ jurídico' : 'Jurídico'}</button><button class="btn sm ghost" data-act="adj">Encargos / desc.</button>` : ''].join('') },
   ],
   rowClass: (r) => (r.status === 'Protestado' || r.acordoCad === 'NÃO' ? 'rowbad' : !r.status ? 'rowwarn' : ''), onRow: goCli,
   onAction: async (a, r) => { const id = r.parcela; if (a === 'pay') MD.abrirPagamento({ contrato: r.contrato, alvoTipo: 'recompra', alvoId: id }); if (a === 'reneg') MD.abrirAcordo(id); if (a === 'prot') await MD.acaoProtestar(id); if (a === 'jur') await MD.acaoJuridico(id); if (a === 'adj') await MD.acaoAjustar(id); },
@@ -110,7 +136,7 @@ export const createAcordos = makeList({
   summary: (rows, M) => { const sem = M.recompras.filter((r) => r.acordoCad === 'NÃO').length; return `<b>${rows.length}</b> acordo(s) · total renegociado <b>${brl(rows.reduce((s, a) => s + Number(a.valor || 0), 0))}</b>${sem ? ` · <b style="color:var(--bad)">${sem} recompra(s) renegociada(s) SEM acordo cadastrado</b> (veja em Recompras)` : ''}`; },
   cols: [
     { key: 'cli', label: 'Cliente', v: (a) => a.cliente, f: (a) => `<b>${esc(a.cliente)}</b><br><span class="mute sm">${esc(a.contrato)} · ${esc(a.banco)}</span>` }, { key: 'nv', label: 'Nível', v: (a) => a.nivel, f: (a) => a.nivel + 'º' },
-    { key: 'val', label: 'Valor do acordo', align: 'r', v: (a) => a.valor, f: (a) => brl(a.valor) }, { key: 'q', label: 'Parcelas', v: (a) => a.qtd, f: (a) => a.qtd + 'x' }, { key: 'pv', label: '1º venc.', v: (a) => a.primeiroVenc, f: (a) => fmtData(a.primeiroVenc) },
+    { key: 'val', label: 'Valor do acordo', align: 'r', v: (a) => a.valor, f: (a) => brl(a.valor) + (a.encargos ? `<br><span class="mute sm">enc. ${a.encargos > 0 ? '+' : '−'}${brl(Math.abs(a.encargos))}</span>` : '') }, { key: 'q', label: 'Parcelas', v: (a) => a.qtd, f: (a) => a.qtd + 'x' }, { key: 'pv', label: '1º venc.', v: (a) => a.primeiroVenc, f: (a) => fmtData(a.primeiroVenc) },
     { key: 'dr', label: 'Renegociado em', v: (a) => a.dtReneg, f: (a) => fmtData(a.dtReneg) }, { key: 'rc', label: 'Em recompra', align: 'r', v: (a) => a.emRecompra, f: (a) => brl(a.emRecompra) },
     { key: 'df', label: 'Diferença', align: 'r', v: (a) => a.diferenca, f: (a) => (a.diferenca == null ? '—' : `<span style="color:${a.diferenca < 0 ? 'var(--bad)' : 'inherit'}">${brl(a.diferenca)}</span>`) },
     { key: 'pg', label: 'Pagas', v: (a) => a.parcelasAcordo.filter((p) => p.marc === 'Pago').length, f: (a) => `${a.parcelasAcordo.filter((p) => p.marc === 'Pago').length}/${a.qtd}` },

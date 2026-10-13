@@ -56,17 +56,17 @@ export async function lerPlanilha(file) {
     if (pids.has(id)) { avisos.push(`Parcela duplicada ignorada: ${id}`); continue; } pids.add(id);
     const marc = str(r['Marcação']); const vp = num(r['Valor pago']);
     dados.parcelas.push({ id, contrato, nivel: Number(r['Nível']) || 0, n: Number(r['Parcela']) || 0, valor: round2(num(r['Valor']) || 0), venc: toISO(r['Vencimento']),
-      marc: ['Pago', 'Recomprado', 'Renegociado'].includes(marc) ? marc : null, dtBaixa: toISO(r['Data da baixa']), dtPgto: toISO(r['Data do pagamento']), valorPago: vp ? round2(vp) : 0 });
+      marc: ['Pago', 'Recomprado', 'Renegociado'].includes(marc) ? marc : null, dtBaixa: toISO(r['Data da baixa']), dtPgto: toISO(r['Data do pagamento']), valorPago: vp ? round2(vp) : 0, ajuste: round2(num(r['Ajuste (+/-)']) || 0), ajusteMotivo: str(r['Motivo do ajuste']) });
   }
   for (const r of rec) {
     const parcela = str(r['Parcela']); if (!parcela) continue; if (!pids.has(parcela)) { avisos.push(`Recompra de parcela inexistente ignorada: ${parcela}`); continue; }
     const aj = num(r['Ajuste de valor']); const st = str(r['Status da recompra']);
-    dados.recompras.push({ id: parcela, parcela, ajuste: aj == null ? null : round2(aj), status: ['Pago', 'Protestado', 'Renegociado'].includes(st) ? st : null, juridico: yes(r['Enviado ao jurídico']) ? 'Sim' : 'Não', dtBaixa: toISO(r['Data da baixa']), dtPgto: toISO(r['Data do pagamento']), valorPago: num(r['Valor pago']) || 0 });
+    dados.recompras.push({ id: parcela, parcela, ajuste: aj == null ? null : round2(aj), status: ['Pago', 'Protestado', 'Renegociado'].includes(st) ? st : null, juridico: yes(r['Enviado ao jurídico']) ? 'Sim' : 'Não', dtBaixa: toISO(r['Data da baixa']), dtPgto: toISO(r['Data do pagamento']), valorPago: num(r['Valor pago']) || 0, encargos: round2(num(r['Encargos (+/-)']) || 0), encargosMotivo: str(r['Motivo dos encargos']) });
   }
   for (const r of aco) {
     const contrato = str(r['Contrato']); if (!contrato) continue; if (!ids.has(contrato)) { avisos.push(`Acordo de contrato inexistente ignorado: ${contrato}`); continue; }
     const nivel = Number(r['Nível']) || 1;
-    dados.acordos.push({ id: `${contrato}/N${nivel}`, contrato, nivel, valor: round2(num(r['Valor do acordo']) || 0), qtd: Number(r['Qtd parcelas']) || 0, primeiroVenc: toISO(r['Primeiro vencimento']), dtReneg: toISO(r['Data da renegociação']), obs: str(r['Observações']) });
+    dados.acordos.push({ id: `${contrato}/N${nivel}`, contrato, nivel, valor: round2(num(r['Valor do acordo']) || 0), qtd: Number(r['Qtd parcelas']) || 0, primeiroVenc: toISO(r['Primeiro vencimento']), dtReneg: toISO(r['Data da renegociação']), obs: str(r['Observações']), encargos: round2(num(r['Encargos']) || 0) });
   }
   for (const r of ant) {
     const contrato = str(r['Contrato']); if (!contrato || !ids.has(contrato)) continue; const n = Number(r['Antecipação']) || 1;
@@ -130,12 +130,12 @@ export async function exportarPlanilha() {
   const add = (n, w) => XLSX.utils.book_append_sheet(wb, w, n);
   add('Contratos', sheet(XLSX, 'CONTRATOS', nota, ['ID', 'Banco', 'Cliente', 'Referência', 'Valor total', 'Qtd parcelas', 'Primeiro vencimento', 'Observações', 'Valor da parcela', 'Pagas', 'Vencidas', 'Valor vencido', 'Total pago', 'Em aberto', 'Conferência'],
     M.contratos.map((c) => [c.id, c.banco, c.cliente, c.referencia, B(c.valorTotal), c.qtd, D(c.primeiroVenc), c.obs, B(c.vParcela), c.pagas, c.vencidas, B(c.valorVencido), B(c.totalPago), B(c.totalCarteiraAberta), c.conferencia]), [11, 10, 36, 16, 14, 9, 14, 24, 13, 8, 9, 13, 13, 13, 18]));
-  add('Parcelas', sheet(XLSX, 'PARCELAS', nota, ['ID parcela', 'Contrato', 'Nível', 'Parcela', 'Valor', 'Vencimento', 'Marcação', 'Data da baixa', 'Data do pagamento', 'Valor pago', 'Banco', 'Cliente', 'Referência', 'Origem', 'Status', 'Dias em atraso', 'Faixa', 'Saldo'],
-    M.parcelas.map((p) => [p.id, p.contrato, p.nivel, p.n, B(p.valor), D(p.venc), p.marc, D(p.dtBaixa), D(p.dtPgto), B(p.valorPago), p.banco, p.cliente, p.referencia, p.origem, p.status, p.atraso, p.faixa, B(p.saldo)]), [17, 11, 7, 8, 12, 13, 13, 13, 13, 12, 10, 34, 16, 14, 12, 10, 9, 12]));
-  add('Recompras', sheet(XLSX, 'RECOMPRAS', nota, ['Parcela', 'Ajuste de valor', 'Status da recompra', 'Enviado ao jurídico', 'Data da baixa', 'Data do pagamento', 'Valor pago', 'Cliente', 'Valor atualizado', 'Saldo', 'Acordo cadastrado', 'Inadimplente'],
-    M.recompras.map((r) => [r.parcela, B(r.ajuste), r.status, r.juridico, D(r.dtBaixa), D(r.dtPgto), B(r.valorPago), r.cliente, B(r.valorAtual), B(r.saldo), r.acordoCad, B(r.inadimplente)]), [17, 13, 16, 12, 13, 13, 12, 34, 13, 12, 12, 13]));
-  add('Acordos', sheet(XLSX, 'ACORDOS', nota, ['Contrato', 'Nível', 'Valor do acordo', 'Qtd parcelas', 'Primeiro vencimento', 'Data da renegociação', 'Observações', 'Cliente', 'Diferença acordo x recompra', 'Situação'],
-    M.acordos.map((a) => [a.contrato, a.nivel, B(a.valor), a.qtd, D(a.primeiroVenc), D(a.dtReneg), a.obs, a.cliente, B(a.diferenca), a.alerta]), [11, 7, 15, 9, 14, 14, 24, 34, 15, 28]));
+  add('Parcelas', sheet(XLSX, 'PARCELAS', nota, ['ID parcela', 'Contrato', 'Nível', 'Parcela', 'Valor', 'Vencimento', 'Marcação', 'Data da baixa', 'Data do pagamento', 'Valor pago', 'Banco', 'Cliente', 'Referência', 'Origem', 'Status', 'Dias em atraso', 'Faixa', 'Saldo', 'Ajuste (+/-)', 'Motivo do ajuste', 'Valor devido'],
+    M.parcelas.map((p) => [p.id, p.contrato, p.nivel, p.n, B(p.valor), D(p.venc), p.marc, D(p.dtBaixa), D(p.dtPgto), B(p.valorPago), p.banco, p.cliente, p.referencia, p.origem, p.status, p.atraso, p.faixa, B(p.saldo), p.ajuste ? B(p.ajuste) : null, p.ajusteMotivo || null, B(p.devido)]), [17, 11, 7, 8, 12, 13, 13, 13, 13, 12, 10, 34, 16, 14, 12, 10, 9, 12, 12, 28, 12]));
+  add('Recompras', sheet(XLSX, 'RECOMPRAS', nota, ['Parcela', 'Ajuste de valor', 'Status da recompra', 'Enviado ao jurídico', 'Data da baixa', 'Data do pagamento', 'Valor pago', 'Cliente', 'Valor atualizado', 'Saldo', 'Acordo cadastrado', 'Inadimplente', 'Encargos (+/-)', 'Motivo dos encargos'],
+    M.recompras.map((r) => [r.parcela, B(r.ajuste), r.status, r.juridico, D(r.dtBaixa), D(r.dtPgto), B(r.valorPago), r.cliente, B(r.valorAtual), B(r.saldo), r.acordoCad, B(r.inadimplente), r.encargos ? B(r.encargos) : null, r.encargosMotivo || null]), [17, 13, 16, 12, 13, 13, 12, 34, 13, 12, 12, 13, 13, 28]));
+  add('Acordos', sheet(XLSX, 'ACORDOS', nota, ['Contrato', 'Nível', 'Valor do acordo', 'Qtd parcelas', 'Primeiro vencimento', 'Data da renegociação', 'Observações', 'Cliente', 'Diferença acordo x recompra', 'Situação', 'Encargos'],
+    M.acordos.map((a) => [a.contrato, a.nivel, B(a.valor), a.qtd, D(a.primeiroVenc), D(a.dtReneg), a.obs, a.cliente, B(a.diferenca), a.alerta, a.encargos ? B(a.encargos) : null]), [11, 7, 15, 9, 14, 14, 24, 34, 15, 28, 12]));
   add('Antecipações', sheet(XLSX, 'ANTECIPAÇÕES', nota, ['Contrato', 'Antecipação', 'Valor', 'Juros e IOF', 'Data', 'Cliente'], M.antecipacoes.map((a) => [a.contrato, a.num, B(a.valor), B(a.juros), D(a.data), (M.cBy.get(a.contrato) || {}).cliente]), [11, 12, 14, 14, 13, 34]));
   add('Pagamentos', sheet(XLSX, 'PAGAMENTOS (livro de caixa)', nota, ['ID', 'Grupo', 'Contrato', 'Tipo', 'Alvo', 'Valor', 'Data', 'Forma', 'Observação', 'Usuário', 'Estornado', 'Aplicado em', 'Quitou'],
     M.pagamentos.map((g) => [g.id, g.grupo, g.contrato, g.alvoTipo, g.alvoId, B(g.valor), D(g.data), g.forma, g.obs, g.nome, g.estornado ? 'Sim' : 'Não', g.rotulo, g.quita ? 'Sim' : 'Não']), [22, 18, 11, 10, 17, 13, 13, 16, 24, 20, 10, 40, 8]));

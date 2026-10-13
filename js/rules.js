@@ -48,9 +48,10 @@ export function buildModel(S, hoje = hojeISO()) {
     const c = cBy.get(p.contrato);
     const marc = p.marc || null;
     const status = marc ? marc : p.venc ? (p.venc < hoje ? 'Vencido' : 'Em Aberto') : '';
+    const ajuste = round2(num(p.ajuste)), devido = round2(num(p.valor) + ajuste); // devido = valor da parcela ± desconto/acréscimo
     const parcialPago = marc === 'Pago' ? 0 : round2(num(p.valorPago));
-    const pago = marc === 'Pago' ? (num(p.valorPago) > 0 ? num(p.valorPago) : num(p.valor)) : parcialPago;
-    const saldo = marc ? 0 : Math.max(0, round2(num(p.valor) - parcialPago));
+    const pago = marc === 'Pago' ? (num(p.valorPago) > 0 ? num(p.valorPago) : devido) : parcialPago;
+    const saldo = marc ? 0 : Math.max(0, round2(devido - parcialPago));
     const dpv = p.venc ? diffDays(p.venc, hoje) : null;
     const atraso = dpv !== null && (status === 'Vencido' || status === 'Em Aberto') && dpv < 0 ? -dpv : 0;
     let faixa = '';
@@ -66,7 +67,7 @@ export function buildModel(S, hoje = hojeISO()) {
     }
     return { ...p, marc, banco: c ? c.banco : '?', cliente: c ? c.cliente : '?', referencia: c ? c.referencia : '?',
       origem: p.nivel === 0 ? 'Parcela normal' : 'Acordo ' + p.nivel, status, parcial: !marc && parcialPago > 0,
-      pago, parcialPago, saldo, dpv, atraso, faixa, alerta };
+      ajuste, devido, pago, parcialPago, saldo, dpv, atraso, faixa, alerta };
   });
   parcelas.sort((a, b) => (a.contrato < b.contrato ? -1 : a.contrato > b.contrato ? 1 : a.nivel - b.nivel || a.n - b.n));
   const pBy = new Map(parcelas.map((p) => [p.id, p]));
@@ -74,8 +75,10 @@ export function buildModel(S, hoje = hojeISO()) {
   // ---- recompras
   const recompras = S.recompras.map((r) => {
     const p = pBy.get(r.parcela);
-    const valorOriginal = p ? p.valor : 0;
-    const valorAtual = r.ajuste != null && r.ajuste !== '' ? Number(r.ajuste) : valorOriginal;
+    const valorOriginal = p ? p.devido : 0;
+    const encargos = round2(num(r.encargos)); // acréscimo (+) ou desconto (−) sobre o valor da recompra
+    const valorBase = r.ajuste != null && r.ajuste !== '' ? Number(r.ajuste) : valorOriginal;
+    const valorAtual = round2(valorBase + encargos);
     const pagoRec = num(r.valorPago);
     const status = r.status || null;
     const saldo = status === 'Pago' ? 0 : Math.max(0, round2(valorAtual - pagoRec));
@@ -93,7 +96,7 @@ export function buildModel(S, hoje = hojeISO()) {
     }
     const sugestao = p && p.venc ? round2(valorOriginal * (1 + P.multa) + (valorOriginal * P.juros / 30) * Math.max(0, diffDays(dtRecompra || hoje, p.venc))) : null;
     return { ...r, status, p, contrato: p ? p.contrato : '', banco: p ? p.banco : '?', cliente: p ? p.cliente : '?', referencia: p ? p.referencia : '?',
-      nivel: p ? p.nivel : 0, nParc: p ? p.n : 0, venc: p ? p.venc : null, valorOriginal, valorAtual, pagoRec, saldo, dtRecompra,
+      nivel: p ? p.nivel : 0, nParc: p ? p.n : 0, venc: p ? p.venc : null, valorOriginal, valorBase, encargos, valorAtual, pagoRec, saldo, dtRecompra,
       acordoCad, inadimplente: inad, alerta, sugestao, pagoTotal: status === 'Pago' ? (pagoRec > 0 ? pagoRec : valorAtual) : pagoRec };
   });
   const rBy = new Map(recompras.map((r) => [r.parcela, r]));
@@ -187,14 +190,14 @@ export function inadimplencia(M, banco = null) {
   const b = (x) => !banco || x.banco === banco;
   const cs = M.contratos.filter(b), ps = M.parcelas.filter(b), rs = M.recompras.filter(b);
   const carteira = sumBy(cs, (c) => num(c.valorTotal));
-  const pagas = sumBy(ps.filter((p) => p.nivel === 0 && p.marc === 'Pago'), (p) => p.valor);
+  const pagas = sumBy(ps.filter((p) => p.nivel === 0 && p.marc === 'Pago'), (p) => p.devido);
   const parcialRecebido = sumBy(ps.filter((p) => p.parcial), (p) => p.parcialPago);
   const emAberto = sumBy(ps.filter((p) => p.nivel === 0 && p.status === 'Em Aberto'), (p) => p.saldo);
   const normaisVenc = sumBy(ps.filter((p) => p.nivel === 0 && p.status === 'Vencido'), (p) => p.saldo);
   const recPend = sumBy(rs.filter((r) => r.status !== 'Protestado'), (r) => r.inadimplente);
   const recProt = sumBy(rs.filter((r) => r.status === 'Protestado'), (r) => r.saldo);
   const recQuit = sumBy(rs.filter((r) => r.status === 'Pago'), (r) => r.valorAtual);
-  const acEmDia = sumBy(ps.filter((p) => p.nivel >= 1 && p.status === 'Pago'), (p) => p.valor) + sumBy(ps.filter((p) => p.nivel >= 1 && p.status === 'Em Aberto'), (p) => p.saldo);
+  const acEmDia = sumBy(ps.filter((p) => p.nivel >= 1 && p.status === 'Pago'), (p) => p.devido) + sumBy(ps.filter((p) => p.nivel >= 1 && p.status === 'Em Aberto'), (p) => p.saldo);
   const acVenc = sumBy(ps.filter((p) => p.nivel >= 1 && p.status === 'Vencido'), (p) => p.saldo);
   const total = round2(normaisVenc + recPend + recProt + acVenc);
   return { banco: banco || 'TOTAL — TODOS OS BANCOS', carteira, pagas, parcialRecebido, emAberto, normaisVenc, recPend, recProt, recQuit,
@@ -222,7 +225,7 @@ export function painel(M, banco, ini, fim) {
     pagoAcordo: sumBy(evP.filter((e) => e.tipo === 'acordo'), (e) => e.valor), pagoAcordoQ: evP.filter((e) => e.tipo === 'acordo').length,
     recomprado: sumBy(rs.filter((r) => per(r.dtRecompra)), (r) => r.valorAtual), recompradoQ: rs.filter((r) => per(r.dtRecompra)).length,
     renegAcordo: sumBy(ac.filter((a) => per(a.dtReneg)), (a) => num(a.valor)), renegAcordoQ: ac.filter((a) => num(a.valor) > 0 && per(a.dtReneg)).length,
-    renegDireto: sumBy(ps.filter((p) => p.marc === 'Renegociado' && per(p.dtBaixa)), (p) => p.valor), renegDiretoQ: ps.filter((p) => p.marc === 'Renegociado' && per(p.dtBaixa)).length,
+    renegDireto: sumBy(ps.filter((p) => p.marc === 'Renegociado' && per(p.dtBaixa)), (p) => p.devido), renegDiretoQ: ps.filter((p) => p.marc === 'Renegociado' && per(p.dtBaixa)).length,
     protestado: sumBy(rs.filter((r) => r.status === 'Protestado' && per(r.dtBaixa)), (r) => r.valorAtual), protestadoQ: rs.filter((r) => r.status === 'Protestado' && per(r.dtBaixa)).length,
   };
   mes.pagoTotal = round2(mes.pagoNormal + mes.pagoRec + mes.pagoAcordo); mes.pagoTotalQ = mes.pagoNormalQ + mes.pagoRecQ + mes.pagoAcordoQ;
@@ -298,7 +301,11 @@ export function montarFila(parcs, alvoTipo, alvoId, rec, modo = 'futuras') {
   for (const p of ord) fila.push({ key: 'parcela:' + p.id, tipo: 'parcela', id: p.id, saldoC: toC(p.saldo), rotulo: rotuloParcela(p), venc: p.venc });
   return fila;
 }
-export const saldoDoc = (p) => (p.marc ? 0 : Math.max(0, round2(num(p.valor) - num(p.valorPago))));
+/** Valor devido da parcela = valor ± ajuste (desconto/acréscimo). */
+export const devidoDoc = (p) => round2(num(p.valor) + num(p.ajuste));
+export const saldoDoc = (p) => (p.marc ? 0 : Math.max(0, round2(devidoDoc(p) - num(p.valorPago))));
+/** Valor atual de uma recompra (documento cru): base (ajuste absoluto legado ou valor devido da parcela) + encargos. */
+export const valorRecDoc = (r, p) => round2((r.ajuste != null && r.ajuste !== '' ? Number(r.ajuste) : p ? devidoDoc(p) : 0) + num(r.encargos));
 export const rotuloParcela = (p) => `${p.nivel ? 'Acordo ' + p.nivel + ' · ' : ''}Parcela ${p.n} (venc. ${fmtData(p.venc)})`;
 export const fmtData = (s) => (s ? `${s.slice(8, 10)}/${s.slice(5, 7)}/${s.slice(0, 4)}` : '—');
 export const brl = (v) => (v == null || v === '' ? '—' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }));
