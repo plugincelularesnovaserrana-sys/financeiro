@@ -1,1 +1,48 @@
+name: Backup diário
 
+on:
+  schedule:
+    - cron: '59 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: backup
+  cancel-in-progress: false
+
+env:
+  LOJA_NOME: Nova Serrana
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --no-audit --no-fund
+      - name: Preparar a branch de backups
+        run: |
+          git config user.name "backup-bot"
+          git config user.email "backup-bot@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin backups >/dev/null 2>&1; then
+            git fetch origin backups:backups
+          else
+            git branch backups "$(git commit-tree "$(git hash-object -t tree /dev/null)" -m 'Branch de backups')"
+          fi
+          git worktree add bk backups
+      - name: Gerar backup
+        run: node scripts/backup.mjs
+        env:
+          FIREBASE_SA: ${{ secrets.FIREBASE_SA }}
+          BACKUP_DIR: bk
+      - name: Guardar na branch de backups
+        if: always()
+        run: |
+          cd bk
+          git add -A
+          if git diff --cached --quiet; then echo "Nada novo para guardar."; else git commit -m "Backup $(TZ=America/Sao_Paulo date +%F)" && git push origin backups; fi
