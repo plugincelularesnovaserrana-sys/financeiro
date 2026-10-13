@@ -72,7 +72,22 @@ export function createDados(ctx) {
     const M = ctx.M();
     $('#dd-n', el).innerHTML = [['Contratos', M.contratos.length], ['Parcelas', M.parcelas.length], ['Recompras', M.recompras.length], ['Acordos', M.acordos.length], ['Antecipações', M.antecipacoes.length], ['Pagamentos', M.pagamentos.length], ['Registros no histórico', store.list('historico').length]].map(([k, v]) => `<div class="card kpi"><div class="lbl">${k}</div><div class="val" style="font-size:22px">${v}</div></div>`).join('');
   }
-  return { title: 'Dados e planilha', sub: 'Importar a planilha, exportar e fazer backup', update,
+  function backupAuto() {
+    const box = $('#dd-bk', el); if (!box) return;
+    if (app.mode !== 'firebase') { box.innerHTML = '<div class="alert info">O backup automático diário só existe no sistema online (Firebase).</div>'; return; }
+    const b = store.get('config', 'backup');
+    const dt = (ms) => new Date(ms).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+    if (!b || !b.ts) { box.innerHTML = `<div class="alert warn"><b>Backup automático ainda não executado.</b> Siga o <code>LEIA-ME-BACKUP.md</code> e rode o primeiro teste na aba Actions do GitHub.</div>${b && b.erro ? `<div class="alert bad">Última falha: ${esc(b.erro)}</div>` : ''}`; return; }
+    const horas = (Date.now() - b.ts) / 36e5;
+    const velho = horas > 30; // 1 backup por dia (+ folga para o atraso do GitHub)
+    const falhou = b.falhaTs && b.falhaTs > b.ts;
+    const idade = horas < 1 ? 'há menos de 1 hora' : horas < 48 ? `há ${Math.round(horas)} h` : `há ${Math.floor(horas / 24)} dias`;
+    box.innerHTML = `<div class="alert ${velho || falhou ? 'bad' : 'ok'}"><b>Último backup automático: ${dt(b.ts)}</b> (${idade})<br>${b.contratos ?? '—'} contratos · ${b.parcelas ?? '—'} parcelas · ${b.pagamentos ?? '—'} pagamentos${b.arquivo ? ` · arquivo ${esc(b.arquivo)}` : ''}</div>`
+      + (velho ? '<div class="alert warn">Faz mais de 30 horas sem backup. Abra a aba <b>Actions</b> do repositório no GitHub e veja o erro.</div>' : '')
+      + (falhou ? `<div class="alert bad"><b>A última tentativa (${dt(b.falhaTs)}) falhou:</b> ${esc(b.erro || 'erro desconhecido')}</div>` : '')
+      + '<p class="hint">Roda todo dia por volta das 23:59 e guarda uma cópia na branch “backups” do repositório. Para restaurar, baixe o .json do dia e importe aqui em “Importar planilha / backup”.</p>';
+  }
+  return { title: 'Dados e planilha', sub: 'Importar a planilha, exportar e fazer backup',
     mount(host) {
       el = host;
       el.innerHTML = `<div class="grid g4" id="dd-n" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:16px"></div>
@@ -80,6 +95,7 @@ export function createDados(ctx) {
        <div class="grid g2"><div class="card"><h3>Importar planilha / backup</h3><p class="mute">Aceita o <b>controle_financeiro.xlsx</b>, uma exportação deste sistema (.xlsx) ou um backup (.json).</p>
          <input type="file" class="inp" id="dd-f" accept=".xlsx,.json"><div id="dd-prev" style="margin-top:12px"></div></div>
         <div class="card"><h3>Exportar e backup</h3><div class="row" style="flex-direction:column;align-items:stretch;gap:10px"><button class="btn primary" id="dd-x">⬇ Exportar planilha (.xlsx)</button><button class="btn" id="dd-j">⬇ Backup completo (.json)</button></div><p class="hint">Faça um backup JSON antes de qualquer importação do tipo “substituir”.</p></div></div>
+       <div class="card" style="margin-top:16px"><h3>Backup automático diário</h3><div id="dd-bk"></div></div>
        <div class="card" style="margin-top:16px;border-color:#f1c2bc"><h3 style="color:var(--bad)">Zona de perigo</h3><p class="mute">Apaga todos os contratos, parcelas, recompras, acordos, antecipações e pagamentos. O histórico e os usuários são mantidos.</p><button class="btn danger" id="dd-z">Apagar todos os dados…</button></div>`;
       $('#dd-x', el).onclick = safe(async () => { downloadFile(`controle_financeiro_${new Date().toISOString().slice(0, 10)}.xlsx`, await X.exportarPlanilha()); toast('Planilha exportada.', 'ok'); });
       $('#dd-j', el).onclick = safe(async () => { downloadFile(`backup_financeiro_${new Date().toISOString().slice(0, 10)}.json`, X.exportarJSON()); toast('Backup gerado.', 'ok'); });
@@ -102,6 +118,6 @@ export function createDados(ctx) {
         await app.adapter.set('historico', 'L' + Date.now().toString(36).toUpperCase() + 'ZER', { ts: { __ts: true }, uid: app.user.uid, nome: app.user.nome, role: app.user.role, acao: 'Apagar dados', entidade: 'sistema', detalhe: 'Todos os dados operacionais foram apagados.' });
         toast('Dados apagados.', 'ok');
       });
-      update();
-    }, update };
+      update(); backupAuto();
+    }, update() { update(); backupAuto(); } };
 }
