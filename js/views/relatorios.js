@@ -1,6 +1,6 @@
 // Relatórios: uma tela única para consultar, filtrar, totalizar e exportar TODOS os tipos de dados do sistema.
 import { store } from '../store.js';
-import { brl, fmtData, round2, hojeISO } from '../rules.js';
+import { brl, fmtData, round2, hojeISO, situacaoContrato } from '../rules.js';
 import { esc, $, dataTable, badge, toCSV, downloadFile, normalize } from '../ui.js';
 import { loadXLSX } from '../xlsx-io.js';
 
@@ -9,7 +9,7 @@ const col = (key, label, v, o = {}) => ({ key, label, v, ...o, align: o.m ? 'r' 
 const tsDia = (ts) => (ts ? new Date(ts - new Date(ts).getTimezoneOffset() * 60000).toISOString().slice(0, 10) : null);
 const cliLink = (r, t) => `<a href="#/cliente/${esc(r.contrato || r.id)}">${esc(t)}</a>`;
 const cli = col('cli', 'Cliente', (r) => r.cliente, { cls: 'cli-col', f: (r) => `<b>${esc(r.cliente)}</b><br><span class="mute sm">${esc(r.contrato || r.id)} · ${esc(r.banco)}</span>`, x: (r) => r.cliente });
-const sitContrato = (c) => (c.criticasNormais + c.criticasAcordo > 0 ? 'Crítico' : c.valorVencido > 0 ? 'Vencido' : c.totalCarteiraAberta <= 0 ? 'Quitado' : 'Em dia');
+const sitContrato = situacaoContrato;
 const protestoDe = (r) => (r.dtProtesto || r.cartorio || r.status === 'Protestado');
 const dtProt = (r) => r.dtProtesto || (r.status === 'Protestado' ? r.dtBaixa : null) || null;
 
@@ -42,11 +42,11 @@ const REPORTS = {
   contratos: {
     label: 'Contratos', desc: 'Um registro por contrato, com totais pagos, em aberto e vencidos.', date: { label: '1º vencimento', of: (r) => r.primeiroVenc },
     rows: (M) => M.contratos, text: (c) => c.cliente + ' ' + c.referencia + ' ' + c.id,
-    filters: [{ key: 'sit', label: 'Qualquer situação', options: () => ['Crítico', 'Vencido', 'Em dia', 'Quitado'], test: (r, v) => sitContrato(r) === v }],
+    filters: [{ key: 'sit', label: 'Qualquer situação', options: () => ['Crítico', 'Deve à loja', 'Vencido', 'Em dia', 'Quitado'], test: (r, v) => sitContrato(r) === v }],
     cols: [col('id', 'Contrato', (c) => c.id), col('cli', 'Cliente', (c) => c.cliente, { f: (c) => `<b>${cliLink(c, c.cliente)}</b>` }), col('b', 'Banco', (c) => c.banco), col('ref', 'Referência', (c) => c.referencia),
       col('pv', '1º vencimento', (c) => c.primeiroVenc, { d: true }), col('q', 'Parcelas', (c) => c.qtd), col('pg', 'Pagas', (c) => c.pagas, { sum: true }), col('tot', 'Valor total', (c) => c.valorTotal, { m: true, sum: true }),
-      col('pago', 'Total pago', (c) => c.totalPago, { m: true, sum: true }), col('ab', 'Em aberto', (c) => c.totalCarteiraAberta, { m: true, sum: true }), col('ven', 'Vencido', (c) => c.valorVencido, { m: true, sum: true }),
-      col('sit', 'Situação', (c) => sitContrato(c), { f: (c) => badge(sitContrato(c), { 'Crítico': 'bad', 'Vencido': 'warn', 'Em dia': 'ok', 'Quitado': 'info' }[sitContrato(c)]) }), col('obs', 'Observações', (c) => c.obs || '')],
+      col('pago', 'Total pago', (c) => c.totalPago, { m: true, sum: true }), col('ab', 'Em aberto', (c) => c.totalCarteiraAberta, { m: true, sum: true }), col('ven', 'Vencido', (c) => c.valorVencido, { m: true, sum: true }), col('loja', 'Deve à loja', (c) => c.devidoLoja, { m: true, sum: true }),
+      col('sit', 'Situação', (c) => sitContrato(c), { f: (c) => badge(sitContrato(c), { 'Crítico': 'bad', 'Deve à loja': 'purple', 'Vencido': 'warn', 'Em dia': 'ok', 'Quitado': 'info' }[sitContrato(c)]) }), col('obs', 'Observações', (c) => c.obs || '')],
   },
   parcelas: {
     label: 'Parcelas', desc: 'Todas as parcelas (normais e de acordo).', date: { label: 'vencimento', of: (p) => p.venc },

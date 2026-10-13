@@ -147,7 +147,7 @@ function setupSearch() {
   const render = () => {
     const q = normalize(inp.value.trim()); if (!q) return box.classList.add('hide');
     list = store.model().contratos.filter((c) => normalize(c.cliente + ' ' + c.referencia + ' ' + c.id).includes(q)).slice(0, 8); hl = 0;
-    box.innerHTML = list.length ? list.map((c, i) => `<a data-id="${c.id}" class="${i === 0 ? 'hl' : ''}"><span><b>${esc(c.cliente)}</b><br><span class="mute sm">${esc(c.id)} · ${esc(c.banco)} · ref. ${esc(c.referencia || '—')}</span></span><span class="sm" style="text-align:right">${c.valorVencido > 0 ? `<b style="color:var(--bad)">${brl(c.valorVencido)} vencido</b>` : '<span style="color:var(--ok)">em dia</span>'}</span></a>`).join('') : '<div class="none">Nenhum cliente encontrado.</div>';
+    box.innerHTML = list.length ? list.map((c, i) => `<a data-id="${c.id}" class="${i === 0 ? 'hl' : ''}"><span><b>${esc(c.cliente)}</b><br><span class="mute sm">${esc(c.id)} · ${esc(c.banco)} · ref. ${esc(c.referencia || '—')}</span></span><span class="sm" style="text-align:right">${c.valorVencido > 0 ? `<b style="color:var(--bad)">${brl(c.valorVencido)} vencido</b>` : ''}${c.devidoLoja > 0 ? ` <b style="color:var(--purple)">deve ${brl(c.devidoLoja)} à loja</b>` : c.valorVencido > 0 ? '' : '<span style="color:var(--ok)">em dia</span>'}</span></a>`).join('') : '<div class="none">Nenhum cliente encontrado.</div>';
     box.classList.remove('hide');
   };
   const open = (id) => { box.classList.add('hide'); inp.value = ''; inp.blur(); location.hash = '#/cliente/' + id; };

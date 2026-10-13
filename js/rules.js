@@ -147,6 +147,11 @@ export function buildModel(S, hoje = hojeISO()) {
       totalPago: round2(ps.reduce((s, p) => s + p.pago, 0) + (rDe.get(c.id) || []).reduce((s, r) => s + r.pagoTotal, 0)),
       usaAntec: usaAnt,
     };
+    // recompras não quitadas: o título foi pago ao banco pela loja, então o cliente passa a dever À LOJA (continua em débito)
+    const recsPend = (rDe.get(c.id) || []).filter((r) => r.inadimplente > 0);
+    out.devidoLoja = round2(recsPend.reduce((s, r) => s + r.inadimplente, 0));
+    out.recPend = recsPend.length;
+    out.atrasoRec = recsPend.length ? Math.max(...recsPend.map((r) => (r.dtRecompra ? Math.max(0, diffDays(hoje, r.dtRecompra)) : 0))) : null;
     out.totalCarteiraAberta = round2(ps.reduce((s, p) => s + p.saldo, 0) + (rDe.get(c.id) || []).reduce((s, r) => s + (r.status === 'Pago' ? 0 : r.saldo), 0));
     if (usaAnt) {
       const ant = (antDe.get(c.id) || []);
@@ -256,7 +261,11 @@ export function regua(M, banco = null) {
   return M.parcelas.filter((p) => p.faixa === 'Régua' && (!banco || p.banco === banco)).sort((a, b) => (a.venc < b.venc ? -1 : a.venc > b.venc ? 1 : 0));
 }
 export function criticos(M, banco = null) {
-  return M.contratos.filter((c) => c.criticasNormais + c.criticasAcordo > 0 && (!banco || c.banco === banco)).sort((a, b) => b.valorCritico - a.valorCritico);
+  return M.contratos.filter((c) => (c.criticasNormais + c.criticasAcordo > 0 || c.devidoLoja > 0) && (!banco || c.banco === banco)).sort((a, b) => (b.valorCritico + b.devidoLoja) - (a.valorCritico + a.devidoLoja));
+}
+/** Situação do cliente no contrato. Recompra não quitada = continua em débito (agora com a loja): nunca aparece como "Em dia". */
+export function situacaoContrato(c) {
+  return c.criticasNormais + c.criticasAcordo > 0 ? 'Crítico' : c.devidoLoja > 0 ? 'Deve à loja' : c.valorVencido > 0 ? 'Vencido' : c.totalCarteiraAberta <= 0 ? 'Quitado' : 'Em dia';
 }
 export function limites(M) {
   return M.bancos.filter((b) => b.usaAntecipacao === true || b.usaAntecipacao === 'Sim').map((b) => {

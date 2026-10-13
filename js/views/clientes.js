@@ -1,6 +1,6 @@
 import { app, store } from '../store.js';
 import * as ops from '../ops.js';
-import { brl, fmtData, pct } from '../rules.js';
+import { brl, fmtData, pct, situacaoContrato } from '../rules.js';
 import { esc, $, $$, dataTable, badge, exportCSV, normalize, icon, toast, confirmDialog, safe } from '../ui.js';
 import * as MD from '../modals.js';
 
@@ -14,10 +14,11 @@ export function createLista(ctx) {
     { key: 'pg', label: 'Pagas', align: 'r', v: (c) => c.pagas, f: (c) => `${c.pagas}/${c.qtd}` }, { key: 'pago', label: 'Total pago', align: 'r', v: (c) => c.totalPago, f: (c) => brl(c.totalPago) },
     { key: 'ab', label: 'Em aberto', align: 'r', v: (c) => c.totalCarteiraAberta, f: (c) => brl(c.totalCarteiraAberta) },
     { key: 'venc', label: 'Vencido', align: 'r', v: (c) => c.valorVencido, f: (c) => (c.valorVencido > 0 ? `<b style="color:var(--bad)">${brl(c.valorVencido)}</b>` : '—') },
-    { key: 'sit', label: 'Situação', v: (c) => sit(c), f: (c) => { const s = sit(c); return badge(s, { 'Crítico': 'bad', 'Vencido': 'warn', 'Em dia': 'ok', 'Quitado': 'info' }[s]); } },
+    { key: 'loja', label: 'Deve à loja', align: 'r', v: (c) => c.devidoLoja, f: (c) => (c.devidoLoja > 0 ? `<b style="color:#6d4bd1">${brl(c.devidoLoja)}</b>` : '—') },
+    { key: 'sit', label: 'Situação', v: (c) => sit(c), f: (c) => { const s = sit(c); return badge(s, { 'Crítico': 'bad', 'Deve à loja': 'purple', 'Vencido': 'warn', 'Em dia': 'ok', 'Quitado': 'info' }[s]); } },
     { key: 'a', label: '', v: () => '', f: () => '<button class="btn sm primary" data-act="pay">Receber</button>', cls: 'acts' },
   ];
-  const sit = (c) => (c.criticasNormais + c.criticasAcordo > 0 ? 'Crítico' : c.valorVencido > 0 ? 'Vencido' : c.totalCarteiraAberta <= 0 ? 'Quitado' : 'Em dia');
+  const sit = situacaoContrato;
   function update() {
     const M = ctx.M(); const q = normalize(st.q);
     let rows = M.contratos.filter((c) => (!st.banco || c.banco === st.banco) && (!st.sit || sit(c) === st.sit) && (!q || normalize(c.cliente + ' ' + c.referencia + ' ' + c.id).includes(q)));
@@ -28,7 +29,7 @@ export function createLista(ctx) {
     mount(host) {
       el = host;
       el.innerHTML = `<div class="filters"><input class="inp grow" id="cl-q" placeholder="Buscar por nome, referência ou código…" value="${esc(st.q)}"><select class="inp" id="cl-b"><option value="">Todos os bancos</option>${ctx.M().bancos.map((x) => `<option ${st.banco === x.nome ? 'selected' : ''}>${esc(x.nome)}</option>`).join('')}</select>
-        <select class="inp" id="cl-s"><option value="">Todas as situações</option>${['Crítico', 'Vencido', 'Em dia', 'Quitado'].map((s) => `<option ${st.sit === s ? 'selected' : ''}>${s}</option>`).join('')}</select>
+        <select class="inp" id="cl-s"><option value="">Todas as situações</option>${['Crítico', 'Deve à loja', 'Vencido', 'Em dia', 'Quitado'].map((s) => `<option ${st.sit === s ? 'selected' : ''}>${s}</option>`).join('')}</select>
         <button class="btn" id="cl-csv">CSV</button><button class="btn primary" id="cl-new">${icon('plus', 16)} Novo cliente</button></div><div class="card flush" id="cl-t"></div>`;
       $('#cl-q', el).addEventListener('input', (e) => { st.q = e.target.value; update(); }); $('#cl-b', el).addEventListener('input', (e) => { st.banco = e.target.value; update(); }); $('#cl-s', el).addEventListener('input', (e) => { st.sit = e.target.value; update(); });
       $('#cl-new', el).onclick = () => MD.abrirNovoCliente(); $('#cl-csv', el).onclick = () => exportCSV('clientes.csv', cols.filter((c) => c.label), el._rows);
@@ -110,10 +111,11 @@ export function createDetalhe(ctx, id) {
     const tblL = `<div class="card flush" style="margin-top:14px"><div class="card-h"><h3>Histórico deste cliente</h3></div><div class="tbl-wrap"><table class="tbl"><tbody>${logs.map((l) => `<tr><td class="nowrap mute">${new Date(l.ts || Date.now()).toLocaleString('pt-BR')}</td><td class="nowrap"><b>${esc(l.nome)}</b></td><td>${badge(l.acao, 'info')}</td><td class="sm">${esc(l.detalhe)}</td></tr>`).join('') || '<tr><td class="empty">Sem registros.</td></tr>'}</tbody></table></div></div>`;
     el.innerHTML = `<div class="row" style="margin-bottom:12px"><a href="#/clientes">← Clientes</a></div>
       ${outros.length ? `<div class="alert warn">👥 <b>${outros.map((u) => esc(u.nome)).join(', ')}</b> também está visualizando este cliente agora. Alterações aparecem em tempo real para todos.</div>` : ''}
+      ${c.devidoLoja > 0 ? `<div class="alert bad">🏬 <b>Cliente em débito com a loja: ${brl(c.devidoLoja)}</b> em ${c.recPend} título(s) recomprado(s) ainda não quitado(s)${c.atrasoRec ? ` (há até ${c.atrasoRec} dia(s))` : ''}. A parcela deixou de dever ao banco, mas a dívida continua — cobre, renegue ou protesto na tabela Recompras abaixo.</div>` : ''}
       ${c.conferencia !== 'OK' ? `<div class="alert warn">⚠ Cadastro: ${esc(c.conferencia)}</div>` : ''}${c.difParcelas ? `<div class="alert warn">⚠ A soma das parcelas difere do valor total em ${brl(c.difParcelas)}.</div>` : ''}
       <div class="page-h"><div><h1>${esc(c.cliente)}</h1><p>${esc(c.id)} · ${esc(c.banco)} · referência ${esc(c.referencia || '—')} · ${c.qtd}x de ${brl(c.vParcela)} · 1º venc. ${fmtData(c.primeiroVenc)} ${c.obs ? '· ' + esc(c.obs) : ''}</p></div>
        <div class="row"><button class="btn primary" data-a="payc">${icon('cash', 16)} Receber pagamento</button><button class="btn" data-a="editc">Editar</button>${isAdmin() ? '<button class="btn ghost" data-a="delc" style="color:var(--bad)">Excluir</button>' : ''}</div></div>
-      <div class="grid g4">${kp('Valor do contrato', brl(c.valorTotal), 'info')}${kp('Total recebido', brl(c.totalPago), 'ok')}${kp('Em aberto', brl(c.totalCarteiraAberta), 'warn')}${kp('Vencido', brl(c.valorVencido), ven ? 'bad' : 'ok')}</div>
+      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr))">${kp('Valor do contrato', brl(c.valorTotal), 'info')}${kp('Total recebido', brl(c.totalPago), 'ok')}${kp('Em aberto', brl(c.totalCarteiraAberta), 'warn')}${kp('Vencido (banco)', brl(c.valorVencido), ven ? 'bad' : 'ok')}${kp('Deve à loja (recompras)', brl(c.devidoLoja), c.devidoLoja > 0 ? 'bad' : 'ok')}</div>
       <div id="sel-bar"></div>
       ${niveis.map(tblP).join('')}${tblR}${tblA}${tblG}${tblAnt}${tblL}`;
     const ok = new Set(selecionaveis(M).map((x) => x.key)); for (const k of [...sel]) if (!ok.has(k)) sel.delete(k);
