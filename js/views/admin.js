@@ -1,4 +1,4 @@
-import { app, store } from '../store.js';
+import { app, store, listas } from '../store.js';
 import * as ops from '../ops.js';
 import { brl, DEFAULT_PARAMS, pct } from '../rules.js';
 import { esc, $, $$, modal, badge, toast, confirmDialog, promptDialog, safe, downloadFile, brInput, parseBRL, initials } from '../ui.js';
@@ -42,25 +42,50 @@ export function createConfig(ctx) {
   function update() {
     const M = ctx.M(); const P = M.P;
     if (!el._dirty) $('#cf-p', el).innerHTML = Object.entries(L).map(([k, [lb, u]]) => field(lb + (u ? ` (${u})` : ''), `<input class="inp" data-k="${k}" value="${u === '%' ? String(+(P[k] * 100).toFixed(4)).replace('.', ',') : P[k]}">`)).join('');
-    $('#cf-b', el).innerHTML = `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Banco</th><th>Prefixo</th><th>Rótulo do ID</th><th>Antecipação</th><th class="r">Limite</th><th>Ativo</th><th></th></tr></thead><tbody>${M.bancos.map((b) => `<tr><td><b>${esc(b.nome)}</b></td><td>${esc(b.prefixo)}</td><td>${esc(b.rotuloId)}</td><td>${b.usaAntecipacao ? badge('Sim', 'ok') : 'Não'}</td><td class="r">${b.usaAntecipacao ? brl(b.limite) : '—'}</td><td>${b.ativo === false ? badge('Não', 'bad') : badge('Sim', 'ok')}</td><td class="acts"><button class="btn sm ghost" data-b="${esc(b.nome)}">Editar</button></td></tr>`).join('')}</tbody></table></div>`;
+    if (!el.contains(document.activeElement) || document.activeElement.tagName !== 'INPUT') $('#cf-l', el).innerHTML = listasHtml();
+    $('#cf-b', el).innerHTML = `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Banco</th><th>Prefixo</th><th>Rótulo do ID</th><th>Antecipação</th><th class="r">Limite</th><th>Ativo</th><th></th></tr></thead><tbody>${M.bancos.map((b) => `<tr><td><b>${esc(b.nome)}</b></td><td>${esc(b.prefixo)}</td><td>${esc(b.rotuloId)}</td><td>${b.usaAntecipacao ? badge('Sim', 'ok') : 'Não'}</td><td class="r">${b.usaAntecipacao ? brl(b.limite) : '—'}</td><td>${b.ativo === false ? badge('Não', 'bad') : badge('Sim', 'ok')}</td><td class="acts"><button class="btn sm ghost" data-b="${esc(b.nome)}">Editar</button>${app.user.role === 'admin' && !M.contratos.some((c) => c.banco === b.nome) ? `<button class="btn sm ghost" style="color:var(--bad)" data-bdel="${esc(b.nome)}">Excluir</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`;
+  }
+  const LST = [['formas', 'Formas de pagamento', 'Aparecem em "Receber pagamento", na quitação em grupo e nos filtros. A primeira da lista é a sugerida.'], ['motivos', 'Motivos padrão de desconto / acréscimo', 'Sugestões ao dar desconto, acréscimo ou encargos (o campo continua aceitando texto livre).'], ['cartorios', 'Cartórios de protesto', 'Sugestões ao marcar protesto (cartórios já usados também aparecem).']];
+  function listasHtml() {
+    const Ls = listas();
+    return LST.map(([k, titulo, dica]) => `<div class="card"><h3 style="margin:0 0 4px">${titulo}</h3><div class="hint" style="margin-bottom:10px">${dica}</div>
+      <div>${Ls[k].map((x, i) => `<div class="row" style="gap:6px;padding:5px 0;border-bottom:1px solid #eef1f6"><span style="flex:1">${esc(x)}${k === 'formas' && i === 0 ? ' <span class="mute sm">(sugerida)</span>' : ''}</span>
+        <button class="btn sm ghost" data-l="${k}" data-op="up" data-i="${i}" ${i === 0 ? 'disabled' : ''} title="Subir">↑</button><button class="btn sm ghost" data-l="${k}" data-op="down" data-i="${i}" ${i === Ls[k].length - 1 ? 'disabled' : ''} title="Descer">↓</button>
+        <button class="btn sm ghost" data-l="${k}" data-op="ren" data-i="${i}">Editar</button><button class="btn sm ghost" style="color:var(--bad)" data-l="${k}" data-op="del" data-i="${i}">Remover</button></div>`).join('') || '<div class="mute sm" style="padding:6px 0">Nenhum item.</div>'}</div>
+      <div class="row" style="gap:6px;margin-top:10px"><input class="inp" id="ln-${k}" placeholder="Adicionar novo…" style="flex:1"><button class="btn sm primary" data-l="${k}" data-op="add">+ Adicionar</button></div></div>`).join('');
+  }
+  async function editarLista(k, op, i) {
+    const arr = [...listas()[k]]; const nm = LST.find((x) => x[0] === k)[1].toLowerCase();
+    if (op === 'add') { const inp = $('#ln-' + k, el); const v = inp.value.trim(); if (!v) return; if (arr.some((x) => x.toLowerCase() === v.toLowerCase())) throw new Error('Esse item já existe.'); arr.push(v); inp.value = ''; }
+    else if (op === 'ren') { const v = await promptDialog(`Novo nome para "${arr[i]}":`, { title: 'Editar', value: arr[i], okLabel: 'Salvar' }); if (v == null || !v.trim()) return; if (arr.some((x, j) => j !== i && x.toLowerCase() === v.trim().toLowerCase())) throw new Error('Esse item já existe.'); arr[i] = v.trim(); }
+    else if (op === 'del') { if (!(await confirmDialog(`Remover "${arr[i]}" de ${nm}?${k === 'formas' ? '\n\nPagamentos já lançados com essa forma continuam como estão.' : ''}`, { okLabel: 'Remover', danger: true }))) return; arr.splice(i, 1); }
+    else if (op === 'up' && i > 0) [arr[i - 1], arr[i]] = [arr[i], arr[i - 1]];
+    else if (op === 'down' && i < arr.length - 1) [arr[i + 1], arr[i]] = [arr[i], arr[i + 1]];
+    await ops.salvarListas({ [k]: arr }); toast('Lista salva.', 'ok'); if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); setTimeout(() => { const h = $('#cf-l', el); if (h) h.innerHTML = listasHtml(); }, 200);
   }
   function bancoModal(nome) {
     const b = nome ? ctx.M().bancoBy.get(nome) : { nome: '', prefixo: '', rotuloId: 'ID', usaAntecipacao: false, limite: 0, ativo: true };
     const m = modal({ title: nome ? 'Editar banco' : 'Novo banco', body: `<div class="fg">${field('Nome', `<input class="inp" id="bk-n" value="${esc(b.nome)}" ${nome ? 'disabled' : ''}>`)}${field('Prefixo (2 a 4 letras)', `<input class="inp" id="bk-p" value="${esc(b.prefixo)}" maxlength="4" ${nome ? 'disabled' : ''}>`, 'Forma o código dos contratos (ex.: SIC-0001).')}${field('Rótulo do ID', `<input class="inp" id="bk-r" value="${esc(b.rotuloId)}">`, 'Ex.: Nosso número, Borderô.')}
-      ${field('Usa antecipação?', `<select class="inp" id="bk-a"><option value="0">Não</option><option value="1" ${b.usaAntecipacao ? 'selected' : ''}>Sim</option></select>`)}${field('Limite total (R$)', `<input class="inp" id="bk-l" value="${brInput(b.limite)}">`)}${field('Ativo', `<select class="inp" id="bk-at"><option value="1">Sim</option><option value="0" ${b.ativo === false ? 'selected' : ''}>Não</option></select>`)}</div>`,
-      actions: [{ label: 'Cancelar', cls: 'ghost' }, { label: 'Salvar', cls: 'primary', onClick: async () => { await ops.salvarBanco({ nome: $('#bk-n', m.el).value, prefixo: $('#bk-p', m.el).value, rotuloId: $('#bk-r', m.el).value, usaAntecipacao: $('#bk-a', m.el).value === '1', limite: parseBRL($('#bk-l', m.el).value) || 0, ativo: $('#bk-at', m.el).value === '1' }); toast('Banco salvo.', 'ok'); } }] });
+      ${field('Usa antecipação?', `<select class="inp" id="bk-a"><option value="0">Não</option><option value="1" ${b.usaAntecipacao ? 'selected' : ''}>Sim</option></select>`)}${field('Limite total (R$)', `<input class="inp" id="bk-l" value="${brInput(b.limite)}">`)}${field('Ordem na lista', `<input class="inp" id="bk-o" type="number" min="1" value="${b.ordem ?? ''}" placeholder="auto">`)}${field('Ativo', `<select class="inp" id="bk-at"><option value="1">Sim</option><option value="0" ${b.ativo === false ? 'selected' : ''}>Não</option></select>`)}</div>`,
+      actions: [{ label: 'Cancelar', cls: 'ghost' }, { label: 'Salvar', cls: 'primary', onClick: async () => { await ops.salvarBanco({ nome: $('#bk-n', m.el).value, prefixo: $('#bk-p', m.el).value, rotuloId: $('#bk-r', m.el).value, usaAntecipacao: $('#bk-a', m.el).value === '1', limite: parseBRL($('#bk-l', m.el).value) || 0, ativo: $('#bk-at', m.el).value === '1', ordem: $('#bk-o', m.el).value === '' ? undefined : +$('#bk-o', m.el).value }); toast('Banco salvo.', 'ok'); } }] });
   }
   return { title: 'Parâmetros e bancos', sub: 'Regras de cálculo e lista de bancos', update,
     mount(host) {
       el = host;
       el.innerHTML = `<div class="grid g2"><div class="card"><div class="row" style="justify-content:space-between;margin-bottom:12px"><h3 style="margin:0">Parâmetros</h3><button class="btn primary sm" id="cf-save">Salvar parâmetros</button></div><div class="fg" id="cf-p"></div></div>
-        <div class="card flush"><div class="card-h"><h3>Bancos</h3><button class="btn sm primary" id="cf-nb">+ Incluir banco</button></div><div id="cf-b"></div><div class="hint" style="padding:10px 18px 16px">Para incluir um banco futuramente basta cadastrá-lo aqui: painel, inadimplência, filtros e códigos já passam a incluí-lo.</div></div></div>`;
+        <div class="card flush"><div class="card-h"><h3>Bancos</h3><button class="btn sm primary" id="cf-nb">+ Incluir banco</button></div><div id="cf-b"></div><div class="hint" style="padding:10px 18px 16px">Para incluir um banco futuramente basta cadastrá-lo aqui: painel, inadimplência, filtros e códigos já passam a incluí-lo. Banco com contratos não pode ser excluído (marque "Ativo: Não"). Nome e prefixo não mudam depois de criados, pois identificam os contratos.</div></div></div>
+        <h3 style="margin:22px 0 10px">Listas editáveis</h3><div class="grid g3" id="cf-l"></div>`;
       el.addEventListener('input', (e) => { if (e.target.dataset.k) el._dirty = true; });
       $('#cf-save', el).onclick = safe(async () => {
         const p = {}; $$('#cf-p input', el).forEach((i) => { const k = i.dataset.k; let v = parseBRL(i.value); if (isNaN(v)) throw new Error('Valor inválido em ' + L[k][0]); p[k] = L[k][1] === '%' ? Math.round(v * 100) / 10000 : v; });
         await ops.salvarParametros(p); el._dirty = false; toast('Parâmetros salvos. Todos os usuários já veem os novos valores.', 'ok'); update();
       });
       $('#cf-nb', el).onclick = () => bancoModal(); el.addEventListener('click', (e) => { const b = e.target.closest('[data-b]'); if (b) bancoModal(b.dataset.b); });
+      el.addEventListener('click', safe(async (e) => {
+        const d = e.target.closest('[data-bdel]'); if (d) { if (await confirmDialog(`Excluir o banco ${d.dataset.bdel}? (só é possível porque não tem contratos)`, { okLabel: 'Excluir', danger: true })) { await ops.excluirBanco(d.dataset.bdel); toast('Banco excluído.', 'ok'); } return; }
+        const l = e.target.closest('[data-l]'); if (l && !l.disabled) await editarLista(l.dataset.l, l.dataset.op, +l.dataset.i);
+      }));
+      el.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.id && e.target.id.startsWith('ln-')) { e.preventDefault(); el.querySelector(`[data-l="${e.target.id.slice(3)}"][data-op="add"]`).click(); } });
       update();
     }, update };
 }

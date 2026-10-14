@@ -1,5 +1,5 @@
 // Estado em memória sincronizado em tempo real com o adaptador (Firestore ou modo local).
-import { buildModel, hojeISO } from './rules.js';
+import { buildModel, hojeISO, LISTAS_PADRAO } from './rules.js';
 
 export const COLS_DADOS = ['contratos', 'parcelas', 'recompras', 'acordos', 'antecipacoes', 'pagamentos', 'bancos'];
 export const COLS_ALL = [...COLS_DADOS, 'historico', 'users', 'presence', 'config', 'contadores'];
@@ -31,5 +31,11 @@ class Store {
 }
 
 export const store = new Store();
+/** Listas editáveis (formas de pagamento, motivos, cartórios): as salvas em config/listas, ou o padrão. */
+export function listas() {
+  const d = store.get('config', 'listas') || {}; const out = {};
+  for (const k of Object.keys(LISTAS_PADRAO)) out[k] = Array.isArray(d[k]) && (d[k].length || k !== 'formas') ? d[k].filter(Boolean) : LISTAS_PADRAO[k];
+  return out;
+}
 // contexto global da aplicação
 export const app = { adapter: null, user: null, store, mode: 'local' };

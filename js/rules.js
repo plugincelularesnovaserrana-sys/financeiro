@@ -30,6 +30,12 @@ export const DEFAULT_PARAMS = {
   multa: 0.02, juros: 0.01, diasAlertaRecompra: 7, limiteInad: 0.15, diasAviso: 5, diasTolerancia: 5,
   maxNiveis: 2, maxParcAcordo: 36, maxParcContrato: 15,
 };
+/** Listas editáveis (Parâmetros e bancos → Listas). Valores padrão usados enquanto nada foi personalizado. */
+export const LISTAS_PADRAO = {
+  formas: ['PIX', 'Boleto', 'Dinheiro', 'Cartão de débito', 'Cartão de crédito', 'Transferência', 'Depósito', 'Outro'],
+  motivos: ['Multa e juros de mora', 'Desconto para quitação total', 'Pagou à vista', 'Desconto comercial', 'Negociação com o cliente'],
+  cartorios: [],
+};
 const inRange = (d, ini, fim) => !!d && d >= ini && d <= fim;
 const num = (x) => (x === '' || x == null || isNaN(x) ? 0 : Number(x));
 
@@ -47,11 +53,12 @@ export function buildModel(S, hoje = hojeISO()) {
   const parcelas = S.parcelas.map((p) => {
     const c = cBy.get(p.contrato);
     const marc = p.marc || null;
-    const status = marc ? marc : p.venc ? (p.venc < hoje ? 'Vencido' : 'Em Aberto') : '';
+    const canc = !!(c && c.cancelado); // contrato cancelado: o que estava em aberto deixa de ser cobrado
+    const status = marc ? marc : canc ? 'Cancelada' : p.venc ? (p.venc < hoje ? 'Vencido' : 'Em Aberto') : '';
     const ajuste = round2(num(p.ajuste)), devido = round2(num(p.valor) + ajuste); // devido = valor da parcela ± desconto/acréscimo
     const parcialPago = marc === 'Pago' ? 0 : round2(num(p.valorPago));
     const pago = marc === 'Pago' ? (num(p.valorPago) > 0 ? num(p.valorPago) : devido) : parcialPago;
-    const saldo = marc ? 0 : Math.max(0, round2(devido - parcialPago));
+    const saldo = marc || canc ? 0 : Math.max(0, round2(devido - parcialPago));
     const dpv = p.venc ? diffDays(p.venc, hoje) : null;
     const atraso = dpv !== null && (status === 'Vencido' || status === 'Em Aberto') && dpv < 0 ? -dpv : 0;
     let faixa = '';
@@ -66,7 +73,7 @@ export function buildModel(S, hoje = hojeISO()) {
       else alerta = 'OK';
     }
     return { ...p, marc, banco: c ? c.banco : '?', cliente: c ? c.cliente : '?', referencia: c ? c.referencia : '?',
-      origem: p.nivel === 0 ? 'Parcela normal' : 'Acordo ' + p.nivel, status, parcial: !marc && parcialPago > 0,
+      origem: p.nivel === 0 ? 'Parcela normal' : 'Acordo ' + p.nivel, status, parcial: !marc && !canc && parcialPago > 0,
       ajuste, devido, pago, parcialPago, saldo, dpv, atraso, faixa, alerta };
   });
   parcelas.sort((a, b) => (a.contrato < b.contrato ? -1 : a.contrato > b.contrato ? 1 : a.nivel - b.nivel || a.n - b.n));
@@ -84,7 +91,8 @@ export function buildModel(S, hoje = hojeISO()) {
     const saldo = status === 'Pago' ? 0 : Math.max(0, round2(valorAtual - pagoRec));
     const dtRecompra = p ? p.dtBaixa || null : null;
     const acordoCad = status === 'Renegociado' ? ((acordoSoma.get((p ? p.contrato : '') + '|' + ((p ? p.nivel : 0) + 1)) || 0) > 0 ? 'Sim' : 'NÃO') : '';
-    const inad = status === 'Pago' ? 0 : status === 'Renegociado' && acordoCad === 'Sim' ? 0 : saldo;
+    const canc = !!(p && cBy.get(p.contrato) && cBy.get(p.contrato).cancelado);
+    const inad = canc || status === 'Pago' ? 0 : status === 'Renegociado' && acordoCad === 'Sim' ? 0 : saldo;
     let alerta = '';
     if (p) {
       if (!dtRecompra) alerta = 'Falta data da recompra';
@@ -97,7 +105,7 @@ export function buildModel(S, hoje = hojeISO()) {
     const sugestao = p && p.venc ? round2(valorOriginal * (1 + P.multa) + (valorOriginal * P.juros / 30) * Math.max(0, diffDays(dtRecompra || hoje, p.venc))) : null;
     return { ...r, status, p, contrato: p ? p.contrato : '', banco: p ? p.banco : '?', cliente: p ? p.cliente : '?', referencia: p ? p.referencia : '?',
       nivel: p ? p.nivel : 0, nParc: p ? p.n : 0, venc: p ? p.venc : null, valorOriginal, valorBase, encargos, valorAtual, pagoRec, saldo, dtRecompra,
-      acordoCad, inadimplente: inad, alerta, sugestao, pagoTotal: status === 'Pago' ? (pagoRec > 0 ? pagoRec : valorAtual) : pagoRec };
+      acordoCad, inadimplente: inad, cancelado: canc, alerta: canc ? '' : alerta, sugestao, pagoTotal: status === 'Pago' ? (pagoRec > 0 ? pagoRec : valorAtual) : pagoRec };
   });
   const rBy = new Map(recompras.map((r) => [r.parcela, r]));
   for (const p of parcelas) p.rec = rBy.get(p.id) || null;
@@ -152,7 +160,7 @@ export function buildModel(S, hoje = hojeISO()) {
     out.devidoLoja = round2(recsPend.reduce((s, r) => s + r.inadimplente, 0));
     out.recPend = recsPend.length;
     out.atrasoRec = recsPend.length ? Math.max(...recsPend.map((r) => (r.dtRecompra ? Math.max(0, diffDays(hoje, r.dtRecompra)) : 0))) : null;
-    out.totalCarteiraAberta = round2(ps.reduce((s, p) => s + p.saldo, 0) + (rDe.get(c.id) || []).reduce((s, r) => s + (r.status === 'Pago' ? 0 : r.saldo), 0));
+    out.totalCarteiraAberta = round2(ps.reduce((s, p) => s + p.saldo, 0) + (rDe.get(c.id) || []).reduce((s, r) => s + (r.status === 'Pago' || r.cancelado ? 0 : r.saldo), 0));
     if (usaAnt) {
       const ant = (antDe.get(c.id) || []);
       const antecipado = round2(ant.reduce((s, a) => s + num(a.valor), 0));
@@ -194,7 +202,7 @@ const sumBy = (arr, f) => round2(arr.reduce((s, x) => s + f(x), 0));
 export function inadimplencia(M, banco = null) {
   const b = (x) => !banco || x.banco === banco;
   const cs = M.contratos.filter(b), ps = M.parcelas.filter(b), rs = M.recompras.filter(b);
-  const carteira = sumBy(cs, (c) => num(c.valorTotal));
+  const carteira = sumBy(cs.filter((c) => !c.cancelado), (c) => num(c.valorTotal));
   const pagas = sumBy(ps.filter((p) => p.nivel === 0 && p.marc === 'Pago'), (p) => p.devido);
   const parcialRecebido = sumBy(ps.filter((p) => p.parcial), (p) => p.parcialPago);
   const emAberto = sumBy(ps.filter((p) => p.nivel === 0 && p.status === 'Em Aberto'), (p) => p.saldo);
@@ -265,7 +273,7 @@ export function criticos(M, banco = null) {
 }
 /** Situação do cliente no contrato. Recompra não quitada = continua em débito (agora com a loja): nunca aparece como "Em dia". */
 export function situacaoContrato(c) {
-  return c.criticasNormais + c.criticasAcordo > 0 ? 'Crítico' : c.devidoLoja > 0 ? 'Deve à loja' : c.valorVencido > 0 ? 'Vencido' : c.totalCarteiraAberta <= 0 ? 'Quitado' : 'Em dia';
+  return c.cancelado ? 'Cancelado' : c.criticasNormais + c.criticasAcordo > 0 ? 'Crítico' : c.devidoLoja > 0 ? 'Deve à loja' : c.valorVencido > 0 ? 'Vencido' : c.totalCarteiraAberta <= 0 ? 'Quitado' : 'Em dia';
 }
 export function limites(M) {
   return M.bancos.filter((b) => b.usaAntecipacao === true || b.usaAntecipacao === 'Sim').map((b) => {

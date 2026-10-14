@@ -11,6 +11,7 @@ const need = (role) => {
   if (role === 'admin' && app.user.role !== 'admin') throw new OpError('Somente administradores podem fazer isso.');
 };
 const params = () => ({ ...DEFAULT_PARAMS, ...(app.store.get('config', 'params') || {}) });
+const semCancelamento = async (t, contrato) => { const c = await t.get('contratos', contrato); if (c && c.cancelado) throw new OpError('Contrato cancelado: reative-o antes de fazer esta operação.'); };
 const pad = (n, l = 2) => String(n).padStart(l, '0');
 
 function log(t, acao, info = {}) {
@@ -33,6 +34,7 @@ export async function registrarPagamento({ contrato, alvoTipo, alvoId, valor, da
   const M = app.store.model();
   const ids = (M.pDe.get(contrato) || []).map((p) => p.id);
   return A().tx(async (t) => {
+    await semCancelamento(t, contrato);
     const docs = new Map();
     for (const id of ids) docs.set(id, await t.get('parcelas', id));
     let recDoc = null;
@@ -204,6 +206,7 @@ export async function renegociarDireto(id, data = hojeISO()) {
   need(); const P = params();
   return A().tx(async (t) => {
     const d = await t.get('parcelas', id); if (!d) throw new OpError('Parcela não encontrada.');
+    await semCancelamento(t, d.contrato);
     if (d.marc) throw new OpError('Parcela já possui marcação.');
     if (d.nivel >= P.maxNiveis) throw new OpError('No último nível de acordo a parcela só pode ser paga.');
     if ((d.valorPago || 0) > 0) throw new OpError('Parcela com pagamento parcial: use Recomprar (o saldo vira recompra).');
@@ -217,6 +220,7 @@ export async function recomprar(parcelaId, data = hojeISO()) {
   need(); const P = params();
   return A().tx(async (t) => {
     const d = await t.get('parcelas', parcelaId); if (!d) throw new OpError('Parcela não encontrada.');
+    await semCancelamento(t, d.contrato);
     if (d.marc) throw new OpError('Parcela já possui marcação (' + d.marc + ').');
     if (d.nivel >= P.maxNiveis) throw new OpError('No último nível de acordo a parcela só pode ser paga.');
     const saldo = saldoDoc(d);
@@ -331,6 +335,7 @@ export async function renegociarRecompra(parcelaId, acordo, data = hojeISO()) {
     const r = await t.get('recompras', parcelaId), p = await t.get('parcelas', parcelaId);
     if (!r || !p) throw new OpError('Recompra não encontrada.');
     if (r.status === 'Pago') throw new OpError('Recompra já paga.');
+    await semCancelamento(t, p.contrato);
     const nivel = p.nivel + 1;
     checarAcordo({ ...acordo, nivel }, P);
     const ex = await t.get('acordos', `${p.contrato}/N${nivel}`);
@@ -348,6 +353,7 @@ export async function criarAcordo(contrato, nivel, acordo) {
   checarAcordo({ ...acordo, nivel }, P);
   return A().tx(async (t) => {
     const c = await t.get('contratos', contrato); if (!c) throw new OpError('Contrato não encontrado.');
+    if (c.cancelado) throw new OpError('Contrato cancelado: reative-o antes de fazer esta operação.');
     if (await t.get('acordos', `${contrato}/N${nivel}`)) throw new OpError(`O ${nivel}º acordo deste contrato já está cadastrado.`);
     gravarAcordo(t, contrato, nivel, { ...acordo, dtReneg: acordo.dtReneg || hojeISO() });
     log(t, 'Novo acordo', { entidade: 'acordo', id: `${contrato}/N${nivel}`, ...ctInfo(contrato), detalhe: `${nivel}º acordo: ${brl(acordo.valor)}${acordo.encargos ? ` (incluindo encargos de ${brl(acordo.encargos)})` : ''} em ${acordo.qtd}x, 1º venc. ${fmtData(acordo.primeiroVenc)}.` });
@@ -401,9 +407,32 @@ export async function salvarParametros(p) {
   need('admin');
   return A().tx(async (t) => {
     const antes = (await t.get('config', 'params')) || {};
-    t.set('config', 'params', { ...p });
+    t.set('config', 'params', { ...antes, ...p });
     const dif = Object.keys(p).filter((k) => p[k] !== antes[k]).map((k) => `${k}: ${antes[k] ?? '—'} → ${p[k]}`);
     log(t, 'Parâmetros', { entidade: 'config', id: 'params', detalhe: dif.join('; ') || 'sem alterações' });
+  });
+}
+/** Listas editáveis: formas de pagamento, motivos padrão de desconto/acréscimo e cartórios. Grava só as chaves informadas. */
+export async function salvarListas(novas) {
+  need('admin');
+  const limpa = (arr) => { const v = [], vistos = new Set(); for (const x of arr || []) { const s = String(x || '').trim().replace(/\s+/g, ' '); if (s && !vistos.has(s.toLowerCase())) { vistos.add(s.toLowerCase()); v.push(s); } } return v; };
+  const upd = {};
+  for (const k of ['formas', 'motivos', 'cartorios']) if (k in novas) upd[k] = limpa(novas[k]);
+  if ('formas' in upd && !upd.formas.length) throw new OpError('Mantenha ao menos uma forma de pagamento.');
+  return A().tx(async (t) => {
+    const antes = (await t.get('config', 'listas')) || {};
+    t.set('config', 'listas', { ...antes, ...upd });
+    log(t, 'Listas', { entidade: 'config', id: 'listas', detalhe: Object.keys(upd).map((k) => `${k}: ${(upd[k] || []).join(', ') || '(vazio)'}`).join(' | ') });
+  });
+}
+export async function excluirBanco(nome) {
+  need('admin');
+  const M = app.store.model();
+  if (M.contratos.some((c) => c.banco === nome)) throw new OpError('Este banco tem contratos cadastrados. Para tirá-lo de uso, edite e marque "Ativo: Não".');
+  return A().tx(async (t) => {
+    if (!(await t.get('bancos', nome))) throw new OpError('Banco não encontrado.');
+    t.delete('bancos', nome);
+    log(t, 'Excluir banco', { entidade: 'banco', id: nome, banco: nome, detalhe: `Banco ${nome} excluído (sem contratos).` });
   });
 }
 export async function salvarBanco(b) {
@@ -469,6 +498,7 @@ const chave = (it) => it.tipo + ':' + it.id;
 function dedup(itens) { const m = new Map(); for (const it of itens || []) m.set(chave(it), { tipo: it.tipo, id: it.id }); return [...m.values()]; }
 /** Lê (dentro da transação) os itens selecionados e valida que pertencem ao contrato. */
 async function lerItens(t, contrato, itens) {
+  await semCancelamento(t, contrato);
   const out = [];
   for (const it of itens) {
     const p = await t.get('parcelas', it.id);
@@ -583,5 +613,29 @@ export async function alternarBloqueio(contrato, { bloquear, motivo = '', data }
     if (novo === !!c.bloqueado) throw new OpError(novo ? 'O aparelho já está marcado como bloqueado.' : 'O aparelho já está desbloqueado.');
     t.update('contratos', contrato, novo ? { bloqueado: true, bloqueadoEm: data, bloqueadoMotivo: motivo, bloqueadoPor: app.user.nome } : { bloqueado: false, bloqueadoEm: null, bloqueadoMotivo: '', bloqueadoPor: '' });
     log(t, novo ? 'Aparelho bloqueado' : 'Aparelho desbloqueado', { entidade: 'contrato', id: contrato, ...ctInfo(contrato), detalhe: novo ? `Aparelho bloqueado em ${fmtData(data)}${motivo ? ' — ' + motivo : ''}.` : `Aparelho desbloqueado em ${fmtData(data)}${motivo ? ' — ' + motivo : ''}.` });
+  });
+}
+
+/* ------------------------------------------------------------------ CANCELAMENTO DO CONTRATO */
+/** Cancela o contrato (ou corrige os dados de um cancelamento já feito). O que estava em aberto deixa de ser cobrado e de contar na inadimplência. */
+export async function salvarCancelamento(contrato, { data, obs = '', recolhido = false, estorno = false, valorEstornado = 0 } = {}) {
+  need(); obs = String(obs || '').trim(); data = data || hojeISO();
+  if (data > hojeISO()) throw new OpError('A data do cancelamento não pode ser futura.');
+  valorEstornado = estorno ? round2(valorEstornado || 0) : 0;
+  if (estorno && !(valorEstornado > 0)) throw new OpError('Informe o valor estornado ao cliente (ou marque "Não houve estorno").');
+  return A().tx(async (t) => {
+    const c = await t.get('contratos', contrato); if (!c) throw new OpError('Contrato não encontrado.');
+    const novo = !c.cancelado;
+    t.update('contratos', contrato, { cancelado: true, canceladoEm: data, canceladoObs: obs, aparelhoRecolhido: !!recolhido, estornoHouve: !!estorno, valorEstornado, canceladoPor: novo ? app.user.nome : (c.canceladoPor || app.user.nome) });
+    log(t, novo ? 'Contrato cancelado' : 'Cancelamento editado', { entidade: 'contrato', id: contrato, ...ctInfo(contrato), detalhe: `${novo ? 'Contrato cancelado' : 'Dados do cancelamento atualizados'} em ${fmtData(data)} — aparelho ${recolhido ? 'recolhido' : 'NÃO recolhido'}; ${estorno ? 'estorno de ' + brl(valorEstornado) : 'sem estorno'}${obs ? ' — ' + obs : ''}.` });
+  });
+}
+export async function reativarContrato(contrato, motivo = '') {
+  need(); motivo = String(motivo || '').trim();
+  return A().tx(async (t) => {
+    const c = await t.get('contratos', contrato); if (!c) throw new OpError('Contrato não encontrado.');
+    if (!c.cancelado) throw new OpError('O contrato não está cancelado.');
+    t.update('contratos', contrato, { cancelado: false, canceladoEm: null, canceladoObs: '', aparelhoRecolhido: false, estornoHouve: false, valorEstornado: 0, canceladoPor: '' });
+    log(t, 'Contrato reativado', { entidade: 'contrato', id: contrato, ...ctInfo(contrato), detalhe: `Cancelamento desfeito (era de ${fmtData(c.canceladoEm)})${motivo ? ' — ' + motivo : ''}.` });
   });
 }

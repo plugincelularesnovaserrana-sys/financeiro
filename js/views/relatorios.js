@@ -1,5 +1,5 @@
 // Relatórios: uma tela única para consultar, filtrar, totalizar e exportar TODOS os tipos de dados do sistema.
-import { store } from '../store.js';
+import { store, listas } from '../store.js';
 import { brl, fmtData, round2, hojeISO, situacaoContrato } from '../rules.js';
 import { esc, $, dataTable, badge, toCSV, downloadFile, normalize } from '../ui.js';
 import { loadXLSX } from '../xlsx-io.js';
@@ -42,17 +42,17 @@ const REPORTS = {
   contratos: {
     label: 'Contratos', desc: 'Um registro por contrato, com totais pagos, em aberto e vencidos.', date: { label: '1º vencimento', of: (r) => r.primeiroVenc },
     rows: (M) => M.contratos, text: (c) => c.cliente + ' ' + c.referencia + ' ' + c.id,
-    filters: [{ key: 'sit', label: 'Qualquer situação', options: () => ['Crítico', 'Deve à loja', 'Vencido', 'Em dia', 'Quitado'], test: (r, v) => sitContrato(r) === v },
+    filters: [{ key: 'sit', label: 'Qualquer situação', options: () => ['Crítico', 'Deve à loja', 'Vencido', 'Em dia', 'Quitado', 'Cancelado'], test: (r, v) => sitContrato(r) === v },
       { key: 'blk', label: 'Aparelho: todos', options: () => [{ v: 'sim', l: 'Bloqueados' }, { v: 'nao', l: 'Não bloqueados' }], test: (r, v) => (v === 'sim' ? !!r.bloqueado : !r.bloqueado) }],
     cols: [col('id', 'Contrato', (c) => c.id), col('cli', 'Cliente', (c) => c.cliente, { f: (c) => `<b>${cliLink(c, c.cliente)}</b>${c.bloqueado ? '<span class="blk">Bloqueado</span>' : ''}` }), col('b', 'Banco', (c) => c.banco), col('ref', 'Referência', (c) => c.referencia),
       col('pv', '1º vencimento', (c) => c.primeiroVenc, { d: true }), col('q', 'Parcelas', (c) => c.qtd), col('pg', 'Pagas', (c) => c.pagas, { sum: true }), col('tot', 'Valor total', (c) => c.valorTotal, { m: true, sum: true }),
       col('pago', 'Total pago', (c) => c.totalPago, { m: true, sum: true }), col('ab', 'Em aberto', (c) => c.totalCarteiraAberta, { m: true, sum: true }), col('ven', 'Vencido', (c) => c.valorVencido, { m: true, sum: true }), col('loja', 'Deve à loja', (c) => c.devidoLoja, { m: true, sum: true }),
-      col('sit', 'Situação', (c) => sitContrato(c), { f: (c) => badge(sitContrato(c), { 'Crítico': 'bad', 'Deve à loja': 'purple', 'Vencido': 'warn', 'Em dia': 'ok', 'Quitado': 'info' }[sitContrato(c)]) }), col('blq', 'Aparelho bloqueado', (c) => (c.bloqueado ? 'Sim' : 'Não')), col('blqm', 'Motivo do bloqueio', (c) => c.bloqueadoMotivo || ''), col('obs', 'Observações', (c) => c.obs || '')],
+      col('sit', 'Situação', (c) => sitContrato(c), { f: (c) => badge(sitContrato(c), { 'Crítico': 'bad', 'Deve à loja': 'purple', 'Vencido': 'warn', 'Em dia': 'ok', 'Quitado': 'info', 'Cancelado': 'mute' }[sitContrato(c)]) }), col('canc', 'Cancelado', (c) => (c.cancelado ? 'Sim' : 'Não')), col('blq', 'Aparelho bloqueado', (c) => (c.bloqueado ? 'Sim' : 'Não')), col('blqm', 'Motivo do bloqueio', (c) => c.bloqueadoMotivo || ''), col('obs', 'Observações', (c) => c.obs || '')],
   },
   parcelas: {
     label: 'Parcelas', desc: 'Todas as parcelas (normais e de acordo).', date: { label: 'vencimento', of: (p) => p.venc },
     rows: (M) => M.parcelas, text: (p) => p.cliente + ' ' + p.referencia + ' ' + p.contrato,
-    filters: [{ key: 'status', label: 'Todos os status', options: () => ['Em Aberto', 'Vencido', 'Pago', 'Recomprado', 'Renegociado'], test: (r, v) => r.status === v },
+    filters: [{ key: 'status', label: 'Todos os status', options: () => ['Em Aberto', 'Vencido', 'Pago', 'Recomprado', 'Renegociado', 'Cancelada'], test: (r, v) => r.status === v },
       { key: 'nivel', label: 'Todos os níveis', options: () => [{ v: 0, l: 'Normais' }, { v: 1, l: '1º acordo' }, { v: 2, l: '2º acordo' }], test: (r, v) => r.nivel === +v },
       { key: 'faixa', label: 'Qualquer faixa', options: () => ['Régua', 'Crítico'], test: (r, v) => r.faixa === v }],
     cols: [cli, col('o', 'Origem', (p) => p.origem), col('n', 'Parc.', (p) => p.n), col('v', 'Vencimento', (p) => p.venc, { d: true }), col('vo', 'Valor original', (p) => p.valor, { m: true, sum: true }), col('aj', 'Ajuste', (p) => p.ajuste || 0, { m: true, sum: true }),
@@ -80,6 +80,15 @@ const REPORTS = {
       col('pr', 'Protocolo', (r) => r.protocoloProtesto || ''), col('va', 'Valor atual', (r) => r.valorAtual, { m: true, sum: true }), col('sd', 'Saldo em aberto', (r) => r.saldo, { m: true, sum: true }), col('st', 'Status', (r) => r.status || 'Pendente', { f: (r) => badge(r.status || 'Pendente', r.status ? undefined : 'warn') }),
       col('ob', 'Observação', (r) => r.obsProtesto || '')],
   },
+  cancelamentos: {
+    label: 'Cancelamentos de contrato', desc: 'Contratos cancelados: aparelho recolhido, estorno ao cliente e observações.', date: { label: 'data do cancelamento', of: (c) => c.canceladoEm },
+    rows: (M) => M.contratos.filter((c) => c.cancelado), text: (c) => c.cliente + ' ' + c.referencia + ' ' + c.id + ' ' + (c.canceladoObs || ''),
+    filters: [{ key: 'rec', label: 'Aparelho: todos', options: () => [{ v: 'sim', l: 'Recolhido' }, { v: 'nao', l: 'NÃO recolhido' }], test: (c, v) => (v === 'sim' ? !!c.aparelhoRecolhido : !c.aparelhoRecolhido) },
+      { key: 'est', label: 'Estorno: todos', options: () => [{ v: 'sim', l: 'Houve estorno' }, { v: 'nao', l: 'Sem estorno' }], test: (c, v) => (v === 'sim' ? !!c.estornoHouve : !c.estornoHouve) }],
+    cols: [col('id', 'Contrato', (c) => c.id), col('cli', 'Cliente', (c) => c.cliente, { cls: 'cli-col', f: (c) => `<b>${cliLink(c, c.cliente)}</b>` }), col('b', 'Banco', (c) => c.banco), col('ref', 'Referência', (c) => c.referencia), col('dt', 'Cancelado em', (c) => c.canceladoEm, { d: true }),
+      col('tv', 'Valor do contrato', (c) => c.valorTotal, { m: true, sum: true }), col('pg', 'Total recebido', (c) => c.totalPago, { m: true, sum: true }), col('ap', 'Aparelho recolhido', (c) => (c.aparelhoRecolhido ? 'Sim' : 'Não'), { f: (c) => (c.aparelhoRecolhido ? badge('Sim', 'ok') : badge('Não', 'bad')) }),
+      col('es', 'Estorno', (c) => (c.estornoHouve ? 'Sim' : 'Não')), col('ev', 'Valor estornado', (c) => c.valorEstornado || 0, { m: true, sum: true }), col('ob', 'Observação', (c) => c.canceladoObs || ''), col('po', 'Registrado por', (c) => c.canceladoPor || '')],
+  },
   acordos: {
     label: 'Acordos', desc: 'Renegociações em cadeia (1º, 2º acordo).', date: { label: 'data da renegociação', of: (a) => a.dtReneg },
     rows: (M) => M.acordos, text: (a) => a.cliente + ' ' + a.referencia + ' ' + a.contrato,
@@ -102,7 +111,7 @@ const REPORTS = {
     text: (g) => g.cliente + ' ' + g.forma + ' ' + g.nome + ' ' + g.contrato,
     filters: [{ key: 'estornado', label: 'Todos', options: () => [{ v: 'nao', l: 'Somente válidos' }, { v: 'sim', l: 'Somente estornados' }], test: (r, v) => (v === 'nao' ? !r.estornado : !!r.estornado) },
       { key: 'usuario', label: 'Todos os usuários', options: () => store.list('users').map((u) => ({ v: u.id, l: u.nome })), test: (r, v) => r.uid === v },
-      { key: 'forma', label: 'Todas as formas', options: () => ['PIX', 'Boleto', 'Dinheiro', 'Cartão de débito', 'Cartão de crédito', 'Transferência', 'Depósito', 'Outro'], test: (r, v) => r.forma === v }],
+      { key: 'forma', label: 'Todas as formas', options: () => [...new Set([...listas().formas, ...store.list('pagamentos').map((g) => g.forma).filter(Boolean)])], test: (r, v) => r.forma === v }],
     cols: [col('d', 'Data', (g) => g.data, { d: true }), cli, col('v', 'Valor', (g) => g.valor, { m: true, sum: true }), col('f', 'Forma', (g) => g.forma), col('a', 'Aplicado em', (g) => g.rotulo), col('q', 'Quitou', (g) => (g.quita ? 'Sim' : 'Não')),
       col('u', 'Lançado por', (g) => g.nome), col('e', 'Estornado', (g) => (g.estornado ? 'Sim' : 'Não')), col('ob', 'Observação', (g) => g.obs || ''), col('ts', 'Registrado em', (g) => (g.ts ? new Date(g.ts).toLocaleString('pt-BR') : ''))],
     sumRows: (rows) => rows.filter((r) => !r.estornado),

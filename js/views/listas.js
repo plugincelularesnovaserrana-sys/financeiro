@@ -1,4 +1,4 @@
-import { app, store } from '../store.js';
+import { app, store, listas } from '../store.js';
 import * as ops from '../ops.js';
 import { brl, fmtData, pct, inadimplencia, limites } from '../rules.js';
 import { esc, $, dataTable, badge, exportCSV, normalize, icon, safe, toast, confirmDialog } from '../ui.js';
@@ -95,7 +95,7 @@ export const createPagamentos = makeList({
   text: (g) => g.cliente + ' ' + g.forma + ' ' + g.nome + ' ' + g.contrato,
   filters: [{ key: 'estornado', label: 'Todos', options: () => [{ v: 'nao', l: 'Somente válidos' }, { v: 'sim', l: 'Somente estornados' }], test: (r, v) => (v === 'nao' ? !r.estornado : !!r.estornado) },
     { key: 'usuario', label: 'Todos os usuários', options: () => store.list('users').map((u) => ({ v: u.id, l: u.nome })), test: (r, v) => r.uid === v },
-    { key: 'forma', label: 'Todas as formas', options: () => ['PIX', 'Boleto', 'Dinheiro', 'Cartão de débito', 'Cartão de crédito', 'Transferência', 'Depósito', 'Outro'], test: (r, v) => r.forma === v }],
+    { key: 'forma', label: 'Todas as formas', options: () => [...new Set([...listas().formas, ...store.list('pagamentos').map((g) => g.forma).filter(Boolean)])], test: (r, v) => r.forma === v }],
   summary: (rows) => { const v = rows.filter((r) => !r.estornado); return `<b>${v.length}</b> lançamento(s) válidos · total <b>${brl(v.reduce((s, r) => s + r.valor, 0))}</b>`; },
   cols: [
     { key: 'data', label: 'Data', v: (g) => g.data, f: (g) => fmtData(g.data) }, { key: 'cli', label: 'Cliente', v: (g) => g.cliente, f: (g) => `<b>${esc(g.cliente)}</b><br><span class="mute sm">${esc(g.contrato)}</span>` },
