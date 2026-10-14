@@ -571,3 +571,17 @@ export async function renegociarGrupo({ contrato, itens, acordo, data = hojeISO(
     return { nivel, qtd: rows.length, total: round2(total) };
   });
 }
+
+/* ------------------------------------------------------------------ BLOQUEIO DO APARELHO */
+/** Marca/desmarca o aparelho do contrato como bloqueado (cliente inadimplente). */
+export async function alternarBloqueio(contrato, { bloquear, motivo = '', data } = {}) {
+  need(); motivo = String(motivo || '').trim(); data = data || hojeISO();
+  if (data > hojeISO()) throw new OpError('A data não pode ser futura.');
+  return A().tx(async (t) => {
+    const c = await t.get('contratos', contrato); if (!c) throw new OpError('Contrato não encontrado.');
+    const novo = bloquear === undefined ? !c.bloqueado : !!bloquear;
+    if (novo === !!c.bloqueado) throw new OpError(novo ? 'O aparelho já está marcado como bloqueado.' : 'O aparelho já está desbloqueado.');
+    t.update('contratos', contrato, novo ? { bloqueado: true, bloqueadoEm: data, bloqueadoMotivo: motivo, bloqueadoPor: app.user.nome } : { bloqueado: false, bloqueadoEm: null, bloqueadoMotivo: '', bloqueadoPor: '' });
+    log(t, novo ? 'Aparelho bloqueado' : 'Aparelho desbloqueado', { entidade: 'contrato', id: contrato, ...ctInfo(contrato), detalhe: novo ? `Aparelho bloqueado em ${fmtData(data)}${motivo ? ' — ' + motivo : ''}.` : `Aparelho desbloqueado em ${fmtData(data)}${motivo ? ' — ' + motivo : ''}.` });
+  });
+}

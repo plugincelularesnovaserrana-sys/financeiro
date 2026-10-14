@@ -47,7 +47,7 @@ export async function lerPlanilha(file) {
   for (const r of cont) {
     const id = str(r['ID']); if (!id) continue;
     if (ids.has(id)) { avisos.push(`Contrato duplicado ignorado: ${id}`); continue; } ids.add(id);
-    dados.contratos.push({ id, banco: str(r['Banco']), cliente: str(r['Cliente']).toUpperCase(), referencia: str(r['Referência']), valorTotal: round2(num(r['Valor total']) || 0), qtd: Number(r['Qtd parcelas']) || 0, primeiroVenc: toISO(r['Primeiro vencimento']), obs: str(r['Observações']) });
+    dados.contratos.push({ id, banco: str(r['Banco']), cliente: str(r['Cliente']).toUpperCase(), referencia: str(r['Referência']), valorTotal: round2(num(r['Valor total']) || 0), qtd: Number(r['Qtd parcelas']) || 0, primeiroVenc: toISO(r['Primeiro vencimento']), obs: str(r['Observações']), ...(yes(r['Aparelho bloqueado']) ? { bloqueado: true, bloqueadoMotivo: str(r['Motivo do bloqueio']), bloqueadoEm: toISO(r['Data do bloqueio']) } : {}) });
   }
   const pids = new Set();
   for (const r of parc) {
@@ -133,8 +133,8 @@ export async function exportarPlanilha() {
   const XLSX = await loadXLSX(); const M = store.model(); const wb = XLSX.utils.book_new();
   const nota = `Exportado em ${new Date().toLocaleString('pt-BR')} por ${app.user.nome}. Mesmo layout do controle_financeiro.xlsx (colunas de entrada primeiro); valores calculados.`;
   const add = (n, w) => XLSX.utils.book_append_sheet(wb, w, n);
-  add('Contratos', sheet(XLSX, 'CONTRATOS', nota, ['ID', 'Banco', 'Cliente', 'Referência', 'Valor total', 'Qtd parcelas', 'Primeiro vencimento', 'Observações', 'Valor da parcela', 'Pagas', 'Vencidas', 'Valor vencido', 'Total pago', 'Em aberto', 'Conferência'],
-    M.contratos.map((c) => [c.id, c.banco, c.cliente, c.referencia, B(c.valorTotal), c.qtd, D(c.primeiroVenc), c.obs, B(c.vParcela), c.pagas, c.vencidas, B(c.valorVencido), B(c.totalPago), B(c.totalCarteiraAberta), c.conferencia]), [11, 10, 36, 16, 14, 9, 14, 24, 13, 8, 9, 13, 13, 13, 18]));
+  add('Contratos', sheet(XLSX, 'CONTRATOS', nota, ['ID', 'Banco', 'Cliente', 'Referência', 'Valor total', 'Qtd parcelas', 'Primeiro vencimento', 'Observações', 'Valor da parcela', 'Pagas', 'Vencidas', 'Valor vencido', 'Total pago', 'Em aberto', 'Conferência', 'Aparelho bloqueado', 'Motivo do bloqueio', 'Data do bloqueio'],
+    M.contratos.map((c) => [c.id, c.banco, c.cliente, c.referencia, B(c.valorTotal), c.qtd, D(c.primeiroVenc), c.obs, B(c.vParcela), c.pagas, c.vencidas, B(c.valorVencido), B(c.totalPago), B(c.totalCarteiraAberta), c.conferencia, c.bloqueado ? 'Sim' : 'Não', c.bloqueadoMotivo || null, D(c.bloqueadoEm)]), [11, 10, 36, 16, 14, 9, 14, 24, 13, 8, 9, 13, 13, 13, 18, 12, 28, 14]));
   add('Parcelas', sheet(XLSX, 'PARCELAS', nota, ['ID parcela', 'Contrato', 'Nível', 'Parcela', 'Valor', 'Vencimento', 'Marcação', 'Data da baixa', 'Data do pagamento', 'Valor pago', 'Banco', 'Cliente', 'Referência', 'Origem', 'Status', 'Dias em atraso', 'Faixa', 'Saldo', 'Ajuste (+/-)', 'Motivo do ajuste', 'Valor devido'],
     M.parcelas.map((p) => [p.id, p.contrato, p.nivel, p.n, B(p.valor), D(p.venc), p.marc, D(p.dtBaixa), D(p.dtPgto), B(p.valorPago), p.banco, p.cliente, p.referencia, p.origem, p.status, p.atraso, p.faixa, B(p.saldo), p.ajuste ? B(p.ajuste) : null, p.ajusteMotivo || null, B(p.devido)]), [17, 11, 7, 8, 12, 13, 13, 13, 13, 12, 10, 34, 16, 14, 12, 10, 9, 12, 12, 28, 12]));
   add('Recompras', sheet(XLSX, 'RECOMPRAS', nota, ['Parcela', 'Ajuste de valor', 'Status da recompra', 'Enviado ao jurídico', 'Data da baixa', 'Data do pagamento', 'Valor pago', 'Cliente', 'Valor atualizado', 'Saldo', 'Acordo cadastrado', 'Inadimplente', 'Encargos (+/-)', 'Motivo dos encargos', 'Data do protesto', 'Cartório do protesto', 'Protocolo do protesto', 'Observação do protesto'],

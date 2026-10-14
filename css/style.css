@@ -76,3 +76,6 @@ label.f{display:block;font-size:12px;font-weight:650;color:#41526b;margin-bottom
 
 /* relatórios / seleção em grupo */
 .tbl td.r{white-space:nowrap}.tbl td.cli-col{min-width:190px}.tbl input[type=checkbox]{width:16px;height:16px;cursor:pointer}
+
+/* aparelho bloqueado */
+.blk{display:inline-block;margin-left:8px;padding:1px 8px;border-radius:999px;font-size:10.5px;font-weight:600;letter-spacing:.02em;text-transform:uppercase;color:#b4342a;background:#fdeceb;border:1px solid #f3c9c4;vertical-align:middle;white-space:nowrap}.tbl tr.rowlock td{background:#fffafa}

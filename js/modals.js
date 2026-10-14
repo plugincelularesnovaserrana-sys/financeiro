@@ -30,7 +30,7 @@ export function escolherCliente(onPick, titulo = 'Escolher cliente') {
   const run = () => {
     const q = normalize($('#pc-q', m.el).value);
     const list = M().contratos.filter((c) => !q || normalize(c.cliente + ' ' + c.referencia + ' ' + c.id).includes(q)).slice(0, 40);
-    $('#pc-r', m.el).innerHTML = list.map((c) => `<a class="pick" data-id="${c.id}" style="display:flex;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #eef1f6;cursor:pointer;color:inherit;text-decoration:none"><span><b>${esc(c.cliente)}</b><br><span class="mute sm">${esc(c.id)} · ${esc(c.banco)} · ref. ${esc(c.referencia || '—')}</span></span><span class="r">${c.valorVencido > 0 ? badge('Vencido ' + brl(c.valorVencido), 'bad') : ''}${c.devidoLoja > 0 ? badge('Deve à loja ' + brl(c.devidoLoja), 'purple') : c.valorVencido > 0 ? '' : badge('Em dia', 'ok')}</span></a>`).join('') || '<div class="mute" style="padding:14px">Nenhum cliente encontrado.</div>';
+    $('#pc-r', m.el).innerHTML = list.map((c) => `<a class="pick" data-id="${c.id}" style="display:flex;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #eef1f6;cursor:pointer;color:inherit;text-decoration:none"><span><b>${esc(c.cliente)}</b>${chipBloqueado(c)}<br><span class="mute sm">${esc(c.id)} · ${esc(c.banco)} · ref. ${esc(c.referencia || '—')}</span></span><span class="r">${c.valorVencido > 0 ? badge('Vencido ' + brl(c.valorVencido), 'bad') : ''}${c.devidoLoja > 0 ? badge('Deve à loja ' + brl(c.devidoLoja), 'purple') : c.valorVencido > 0 ? '' : badge('Em dia', 'ok')}</span></a>`).join('') || '<div class="mute" style="padding:14px">Nenhum cliente encontrado.</div>';
   };
   $('#pc-q', m.el).addEventListener('input', run); run();
   m.el.addEventListener('click', (e) => { const a = e.target.closest('.pick'); if (a) { m.close(); onPick(a.dataset.id); } });
@@ -341,4 +341,16 @@ export function abrirRenegGrupo(contrato, sel, onDone) {
     box.innerHTML = `Valor do acordo: <b>${brl(v)}</b>${enc ? ` (base + ${brl(enc)} de encargos)` : ''}<br><b>${q} parcelas</b> de ${brl(arr[0])}${arr[q - 1] !== arr[0] ? ` (última ${brl(arr[q - 1])})` : ''} · de ${fmtData(d)} a ${fmtData(addMonths(d, q - 1))}<br><span class="mute">Diferença acordo × saldos: ${dif >= 0 ? '+' : ''}${brl(dif)} ${dif < 0 ? '(desconto concedido)' : ''}</span>`;
   };
   $$('input', m.el).forEach((x) => x.addEventListener('input', prev)); prev();
+}
+
+/* ----------------------------------------------------------------- bloqueio do aparelho */
+export const chipBloqueado = (c) => (c && c.bloqueado ? `<span class="blk" title="${esc(c.bloqueadoMotivo || 'Aparelho bloqueado')}">Bloqueado</span>` : '');
+export function abrirBloqueio(contrato) {
+  const c = M().cBy.get(contrato); if (!c) return;
+  const des = !!c.bloqueado;
+  const m = modal({ title: des ? 'Desbloquear aparelho' : 'Marcar aparelho como bloqueado', size: 'sm', body: `<div class="alert ${des ? 'info' : 'warn'}"><b>${esc(c.cliente)}</b> · ${esc(c.id)} · ref. ${esc(c.referencia || '—')}${des ? `<br>Bloqueado desde ${fmtData(c.bloqueadoEm)}${c.bloqueadoMotivo ? ' — ' + esc(c.bloqueadoMotivo) : ''}` : '<br>O cliente passa a aparecer com a etiqueta <b>Bloqueado</b> na lista de clientes. Isto é só um registro: o bloqueio do aparelho em si é feito por você no sistema do aparelho.'}</div>
+    <div class="fg" style="margin-top:10px">${field(des ? 'Data do desbloqueio' : 'Data do bloqueio', `<input class="inp" type="date" id="bq-d" value="${hojeISO()}" max="${hojeISO()}">`)}${field('Motivo / observação', `<input class="inp" id="bq-m" placeholder="${des ? 'ex.: regularizou o pagamento' : 'ex.: 3 parcelas em atraso'}">`, '', 'full')}</div>`,
+    actions: [{ label: 'Cancelar', cls: 'ghost' }, { label: des ? 'Desbloquear' : 'Marcar como bloqueado', cls: des ? 'primary' : 'danger', onClick: async () => {
+      await ops.alternarBloqueio(contrato, { bloquear: !des, motivo: $('#bq-m', m.el).value, data: $('#bq-d', m.el).value }); toast(des ? 'Aparelho desbloqueado.' : 'Aparelho marcado como bloqueado.', 'ok');
+    } }] });
 }

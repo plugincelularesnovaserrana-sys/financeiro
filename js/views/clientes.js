@@ -5,11 +5,11 @@ import { esc, $, $$, dataTable, badge, exportCSV, normalize, icon, toast, confir
 import * as MD from '../modals.js';
 
 /* ============================================================ LISTA */
-let st = { q: '', banco: '', sit: '' };
+let st = { q: '', banco: '', sit: '', blk: '' };
 export function createLista(ctx) {
   let el;
   const cols = [
-    { key: 'id', label: 'Contrato', v: (c) => c.id }, { key: 'cli', label: 'Cliente', v: (c) => c.cliente, f: (c) => `<b>${esc(c.cliente)}</b>` }, { key: 'banco', label: 'Banco', v: (c) => c.banco },
+    { key: 'id', label: 'Contrato', v: (c) => c.id }, { key: 'cli', label: 'Cliente', v: (c) => c.cliente, f: (c) => `<b>${esc(c.cliente)}</b>${MD.chipBloqueado(c)}` }, { key: 'banco', label: 'Banco', v: (c) => c.banco },
     { key: 'ref', label: 'Referência', v: (c) => c.referencia }, { key: 'tot', label: 'Valor total', align: 'r', v: (c) => c.valorTotal, f: (c) => brl(c.valorTotal) },
     { key: 'pg', label: 'Pagas', align: 'r', v: (c) => c.pagas, f: (c) => `${c.pagas}/${c.qtd}` }, { key: 'pago', label: 'Total pago', align: 'r', v: (c) => c.totalPago, f: (c) => brl(c.totalPago) },
     { key: 'ab', label: 'Em aberto', align: 'r', v: (c) => c.totalCarteiraAberta, f: (c) => brl(c.totalCarteiraAberta) },
@@ -21,17 +21,18 @@ export function createLista(ctx) {
   const sit = situacaoContrato;
   function update() {
     const M = ctx.M(); const q = normalize(st.q);
-    let rows = M.contratos.filter((c) => (!st.banco || c.banco === st.banco) && (!st.sit || sit(c) === st.sit) && (!q || normalize(c.cliente + ' ' + c.referencia + ' ' + c.id).includes(q)));
+    let rows = M.contratos.filter((c) => (!st.banco || c.banco === st.banco) && (!st.sit || sit(c) === st.sit) && (!st.blk || (st.blk === 'sim' ? !!c.bloqueado : !c.bloqueado)) && (!q || normalize(c.cliente + ' ' + c.referencia + ' ' + c.id).includes(q)));
     el._rows = rows;
-    dataTable($('#cl-t', el), { cols, rows, pageSize: 50, empty: 'Nenhum cliente encontrado.', onRow: (c) => ctx.go('#/cliente/' + c.id), onAction: (a, c) => { if (a === 'pay') MD.abrirPagamento({ contrato: c.id }); }, rowClass: (c) => (sit(c) === 'Crítico' ? 'rowbad' : '') });
+    dataTable($('#cl-t', el), { cols, rows, pageSize: 50, empty: 'Nenhum cliente encontrado.', onRow: (c) => ctx.go('#/cliente/' + c.id), onAction: (a, c) => { if (a === 'pay') MD.abrirPagamento({ contrato: c.id }); }, rowClass: (c) => (sit(c) === 'Crítico' ? 'rowbad' : c.bloqueado ? 'rowlock' : '') });
   }
   return { title: 'Clientes', sub: 'Contratos de todos os bancos',
     mount(host) {
       el = host;
       el.innerHTML = `<div class="filters"><input class="inp grow" id="cl-q" placeholder="Buscar por nome, referência ou código…" value="${esc(st.q)}"><select class="inp" id="cl-b"><option value="">Todos os bancos</option>${ctx.M().bancos.map((x) => `<option ${st.banco === x.nome ? 'selected' : ''}>${esc(x.nome)}</option>`).join('')}</select>
         <select class="inp" id="cl-s"><option value="">Todas as situações</option>${['Crítico', 'Deve à loja', 'Vencido', 'Em dia', 'Quitado'].map((s) => `<option ${st.sit === s ? 'selected' : ''}>${s}</option>`).join('')}</select>
+        <select class="inp" id="cl-k"><option value="">Aparelho: todos</option><option value="sim" ${st.blk === 'sim' ? 'selected' : ''}>Bloqueados</option><option value="nao" ${st.blk === 'nao' ? 'selected' : ''}>Não bloqueados</option></select>
         <button class="btn" id="cl-csv">CSV</button><button class="btn primary" id="cl-new">${icon('plus', 16)} Novo cliente</button></div><div class="card flush" id="cl-t"></div>`;
-      $('#cl-q', el).addEventListener('input', (e) => { st.q = e.target.value; update(); }); $('#cl-b', el).addEventListener('input', (e) => { st.banco = e.target.value; update(); }); $('#cl-s', el).addEventListener('input', (e) => { st.sit = e.target.value; update(); });
+      $('#cl-q', el).addEventListener('input', (e) => { st.q = e.target.value; update(); }); $('#cl-b', el).addEventListener('input', (e) => { st.banco = e.target.value; update(); }); $('#cl-s', el).addEventListener('input', (e) => { st.sit = e.target.value; update(); }); $('#cl-k', el).addEventListener('input', (e) => { st.blk = e.target.value; update(); });
       $('#cl-new', el).onclick = () => MD.abrirNovoCliente(); $('#cl-csv', el).onclick = () => exportCSV('clientes.csv', cols.filter((c) => c.label), el._rows);
       update();
     }, update };
@@ -111,10 +112,11 @@ export function createDetalhe(ctx, id) {
     const tblL = `<div class="card flush" style="margin-top:14px"><div class="card-h"><h3>Histórico deste cliente</h3></div><div class="tbl-wrap"><table class="tbl"><tbody>${logs.map((l) => `<tr><td class="nowrap mute">${new Date(l.ts || Date.now()).toLocaleString('pt-BR')}</td><td class="nowrap"><b>${esc(l.nome)}</b></td><td>${badge(l.acao, 'info')}</td><td class="sm">${esc(l.detalhe)}</td></tr>`).join('') || '<tr><td class="empty">Sem registros.</td></tr>'}</tbody></table></div></div>`;
     el.innerHTML = `<div class="row" style="margin-bottom:12px"><a href="#/clientes">← Clientes</a></div>
       ${outros.length ? `<div class="alert warn">👥 <b>${outros.map((u) => esc(u.nome)).join(', ')}</b> também está visualizando este cliente agora. Alterações aparecem em tempo real para todos.</div>` : ''}
+      ${c.bloqueado ? `<div class="alert bad" style="background:#fffafa">🔒 <b>Aparelho bloqueado</b>${c.bloqueadoEm ? ' desde ' + fmtData(c.bloqueadoEm) : ''}${c.bloqueadoMotivo ? ' — ' + esc(c.bloqueadoMotivo) : ''}${c.bloqueadoPor ? ' <span class="mute sm">(marcado por ' + esc(c.bloqueadoPor) + ')</span>' : ''}</div>` : ''}
       ${c.devidoLoja > 0 ? `<div class="alert bad">🏬 <b>Cliente em débito com a loja: ${brl(c.devidoLoja)}</b> em ${c.recPend} título(s) recomprado(s) ainda não quitado(s)${c.atrasoRec ? ` (há até ${c.atrasoRec} dia(s))` : ''}. A parcela deixou de dever ao banco, mas a dívida continua — cobre, renegue ou protesto na tabela Recompras abaixo.</div>` : ''}
       ${c.conferencia !== 'OK' ? `<div class="alert warn">⚠ Cadastro: ${esc(c.conferencia)}</div>` : ''}${c.difParcelas ? `<div class="alert warn">⚠ A soma das parcelas difere do valor total em ${brl(c.difParcelas)}.</div>` : ''}
-      <div class="page-h"><div><h1>${esc(c.cliente)}</h1><p>${esc(c.id)} · ${esc(c.banco)} · referência ${esc(c.referencia || '—')} · ${c.qtd}x de ${brl(c.vParcela)} · 1º venc. ${fmtData(c.primeiroVenc)} ${c.obs ? '· ' + esc(c.obs) : ''}</p></div>
-       <div class="row"><button class="btn primary" data-a="payc">${icon('cash', 16)} Receber pagamento</button><button class="btn" data-a="editc">Editar</button>${isAdmin() ? '<button class="btn ghost" data-a="delc" style="color:var(--bad)">Excluir</button>' : ''}</div></div>
+      <div class="page-h"><div><h1>${esc(c.cliente)}${MD.chipBloqueado(c)}</h1><p>${esc(c.id)} · ${esc(c.banco)} · referência ${esc(c.referencia || '—')} · ${c.qtd}x de ${brl(c.vParcela)} · 1º venc. ${fmtData(c.primeiroVenc)} ${c.obs ? '· ' + esc(c.obs) : ''}</p></div>
+       <div class="row"><button class="btn primary" data-a="payc">${icon('cash', 16)} Receber pagamento</button><button class="btn ${c.bloqueado ? '' : 'ghost'}" data-a="bloq" ${c.bloqueado ? '' : 'style="color:#b4342a"'}>${c.bloqueado ? 'Desbloquear aparelho' : 'Bloquear aparelho'}</button><button class="btn" data-a="editc">Editar</button>${isAdmin() ? '<button class="btn ghost" data-a="delc" style="color:var(--bad)">Excluir</button>' : ''}</div></div>
       <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr))">${kp('Valor do contrato', brl(c.valorTotal), 'info')}${kp('Total recebido', brl(c.totalPago), 'ok')}${kp('Em aberto', brl(c.totalCarteiraAberta), 'warn')}${kp('Vencido (banco)', brl(c.valorVencido), ven ? 'bad' : 'ok')}${kp('Deve à loja (recompras)', brl(c.devidoLoja), c.devidoLoja > 0 ? 'bad' : 'ok')}</div>
       <div id="sel-bar"></div>
       ${niveis.map(tblP).join('')}${tblR}${tblA}${tblG}${tblAnt}${tblL}`;
@@ -134,7 +136,7 @@ export function createDetalhe(ctx, id) {
     'g-quit': () => MD.abrirQuitarGrupo(id, escolhidos(ctx.M()), () => { sel.clear(); update(); }),
     'g-rec': () => MD.abrirRecomprarGrupo(id, escolhidos(ctx.M()), () => { sel.clear(); update(); }),
     'g-reneg': () => MD.abrirRenegGrupo(id, escolhidos(ctx.M()), () => { sel.clear(); update(); }),
-    estorno: (b) => MD.acaoEstornar(b.dataset.id), ant: () => MD.abrirAntecipacao(id), editc: () => MD.abrirEditarContrato(id),
+    estorno: (b) => MD.acaoEstornar(b.dataset.id), ant: () => MD.abrirAntecipacao(id), editc: () => MD.abrirEditarContrato(id), bloq: () => MD.abrirBloqueio(id),
     delant: async (b) => { if (await confirmDialog('Excluir esta antecipação?', { okLabel: 'Excluir', danger: true })) await ops.excluirAntecipacao(b.dataset.id); },
     delc: async () => { if (await confirmDialog(`EXCLUIR o contrato ${id} e TODOS os registros ligados (parcelas, recompras, acordos, pagamentos)? Esta ação não pode ser desfeita.`, { title: 'Excluir contrato', okLabel: 'Excluir definitivamente', danger: true })) { await ops.excluirContrato(id); toast('Contrato excluído.', 'ok'); ctx.go('#/clientes'); } },
   };

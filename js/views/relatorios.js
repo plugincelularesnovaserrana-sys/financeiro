@@ -42,11 +42,12 @@ const REPORTS = {
   contratos: {
     label: 'Contratos', desc: 'Um registro por contrato, com totais pagos, em aberto e vencidos.', date: { label: '1º vencimento', of: (r) => r.primeiroVenc },
     rows: (M) => M.contratos, text: (c) => c.cliente + ' ' + c.referencia + ' ' + c.id,
-    filters: [{ key: 'sit', label: 'Qualquer situação', options: () => ['Crítico', 'Deve à loja', 'Vencido', 'Em dia', 'Quitado'], test: (r, v) => sitContrato(r) === v }],
-    cols: [col('id', 'Contrato', (c) => c.id), col('cli', 'Cliente', (c) => c.cliente, { f: (c) => `<b>${cliLink(c, c.cliente)}</b>` }), col('b', 'Banco', (c) => c.banco), col('ref', 'Referência', (c) => c.referencia),
+    filters: [{ key: 'sit', label: 'Qualquer situação', options: () => ['Crítico', 'Deve à loja', 'Vencido', 'Em dia', 'Quitado'], test: (r, v) => sitContrato(r) === v },
+      { key: 'blk', label: 'Aparelho: todos', options: () => [{ v: 'sim', l: 'Bloqueados' }, { v: 'nao', l: 'Não bloqueados' }], test: (r, v) => (v === 'sim' ? !!r.bloqueado : !r.bloqueado) }],
+    cols: [col('id', 'Contrato', (c) => c.id), col('cli', 'Cliente', (c) => c.cliente, { f: (c) => `<b>${cliLink(c, c.cliente)}</b>${c.bloqueado ? '<span class="blk">Bloqueado</span>' : ''}` }), col('b', 'Banco', (c) => c.banco), col('ref', 'Referência', (c) => c.referencia),
       col('pv', '1º vencimento', (c) => c.primeiroVenc, { d: true }), col('q', 'Parcelas', (c) => c.qtd), col('pg', 'Pagas', (c) => c.pagas, { sum: true }), col('tot', 'Valor total', (c) => c.valorTotal, { m: true, sum: true }),
       col('pago', 'Total pago', (c) => c.totalPago, { m: true, sum: true }), col('ab', 'Em aberto', (c) => c.totalCarteiraAberta, { m: true, sum: true }), col('ven', 'Vencido', (c) => c.valorVencido, { m: true, sum: true }), col('loja', 'Deve à loja', (c) => c.devidoLoja, { m: true, sum: true }),
-      col('sit', 'Situação', (c) => sitContrato(c), { f: (c) => badge(sitContrato(c), { 'Crítico': 'bad', 'Deve à loja': 'purple', 'Vencido': 'warn', 'Em dia': 'ok', 'Quitado': 'info' }[sitContrato(c)]) }), col('obs', 'Observações', (c) => c.obs || '')],
+      col('sit', 'Situação', (c) => sitContrato(c), { f: (c) => badge(sitContrato(c), { 'Crítico': 'bad', 'Deve à loja': 'purple', 'Vencido': 'warn', 'Em dia': 'ok', 'Quitado': 'info' }[sitContrato(c)]) }), col('blq', 'Aparelho bloqueado', (c) => (c.bloqueado ? 'Sim' : 'Não')), col('blqm', 'Motivo do bloqueio', (c) => c.bloqueadoMotivo || ''), col('obs', 'Observações', (c) => c.obs || '')],
   },
   parcelas: {
     label: 'Parcelas', desc: 'Todas as parcelas (normais e de acordo).', date: { label: 'vencimento', of: (p) => p.venc },
