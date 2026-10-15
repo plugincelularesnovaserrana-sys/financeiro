@@ -6,14 +6,15 @@ import * as MD from '../modals.js';
 
 /** Fábrica de telas de listagem com filtros, ordenação, paginação e CSV. */
 function makeList(cfg) {
-  const st = { q: '', banco: '', ...(cfg.initial || {}) };
+  const st = { q: '', banco: '', ...(cfg.initial || {}) }; if (cfg.dateFields) { cfg.dates = true; st.dt = st.dt || cfg.dateFields[0].k; }
+  const dof = (r) => (cfg.dateFields ? cfg.dateFields.find((f) => f.k === st.dt).of(r) : cfg.dateOf(r));
   return function create(ctx) {
     let el;
     function update() {
       const M = ctx.M(); const q = normalize(st.q);
       let rows = cfg.rows(M, st).filter((r) => (!st.banco || r.banco === st.banco) && (!q || normalize(cfg.text(r)).includes(q)));
       for (const f of cfg.filters || []) if (st[f.key]) rows = rows.filter((r) => f.test(r, st[f.key], st));
-      if (cfg.dates && (st.d1 || st.d2)) rows = rows.filter((r) => { const d = cfg.dateOf(r); return d && (!st.d1 || d >= st.d1) && (!st.d2 || d <= st.d2); });
+      if (cfg.dates && (st.d1 || st.d2)) rows = rows.filter((r) => { const d = dof(r); return d && (!st.d1 || d >= st.d1) && (!st.d2 || d <= st.d2); });
       el._rows = rows;
       if (cfg.summary) $('#ls-sum', el).innerHTML = cfg.summary(rows, M);
       dataTable($('#ls-t', el), { cols: cfg.cols, rows, pageSize: cfg.pageSize || 50, empty: cfg.empty, rowClass: cfg.rowClass, onRow: cfg.onRow && ((r) => cfg.onRow(r, ctx)), onAction: cfg.onAction && safe((a, r) => cfg.onAction(a, r, ctx)) });
@@ -24,12 +25,14 @@ function makeList(cfg) {
         el.innerHTML = `${cfg.pre ? cfg.pre(M) : ''}<div class="filters"><div style="position:relative;flex:1;min-width:220px"><input class="inp" style="width:100%" id="ls-q" autocomplete="off" placeholder="${cfg.placeholder || 'Buscar…'}" value="${esc(st.q)}"><div class="results hide" id="ls-s"></div></div>
           <select class="inp" id="ls-b"><option value="">Todos os bancos</option>${M.bancos.map((x) => `<option ${st.banco === x.nome ? 'selected' : ''}>${esc(x.nome)}</option>`).join('')}</select>
           ${(cfg.filters || []).map((f) => `<select class="inp" data-f="${f.key}"><option value="">${f.label}</option>${f.options(M).map((o) => `<option value="${esc(o.v ?? o)}" ${String(st[f.key]) === String(o.v ?? o) ? 'selected' : ''}>${esc(o.l ?? o)}</option>`).join('')}</select>`).join('')}
-          ${(cfg.dates ? `<input class="inp" type="date" id="ls-d1" title="de" value="${st.d1 || ''}"><input class="inp" type="date" id="ls-d2" title="até" value="${st.d2 || ''}">` : '')}
+          ${(cfg.dateFields ? `<select class="inp" id="ls-dt" title="Filtrar por qual data">${cfg.dateFields.map((f) => `<option value="${f.k}" ${st.dt === f.k ? 'selected' : ''}>${f.l}</option>`).join('')}</select>` : '')}${(cfg.dates ? `<span class="mute sm">de</span><input class="inp" type="date" id="ls-d1" title="de" value="${st.d1 || ''}"><span class="mute sm">até</span><input class="inp" type="date" id="ls-d2" title="até" value="${st.d2 || ''}"><button class="btn sm ghost" id="ls-dx" title="Limpar datas">✕</button>` : '')}
           <button class="btn" id="ls-csv">CSV</button>${cfg.buttons ? cfg.buttons : ''}</div>${cfg.summary ? '<div class="alert info" id="ls-sum"></div>' : ''}<div class="card flush" id="ls-t"></div>`;
         suggestClientes(el, ctx, st, cfg);
         $('#ls-q', el).addEventListener('input', (e) => { st.q = e.target.value; update(); }); $('#ls-b', el).addEventListener('input', (e) => { st.banco = e.target.value; update(); });
         el.querySelectorAll('[data-f]').forEach((s) => s.addEventListener('input', () => { st[s.dataset.f] = s.value; update(); }));
         if (cfg.dates) ['d1', 'd2'].forEach((k) => $('#ls-' + k, el).addEventListener('input', (e) => { st[k] = e.target.value; update(); }));
+        if (cfg.dates) $('#ls-dx', el).onclick = () => { st.d1 = st.d2 = ''; $('#ls-d1', el).value = ''; $('#ls-d2', el).value = ''; update(); };
+        if (cfg.dateFields) $('#ls-dt', el).addEventListener('input', (e) => { st.dt = e.target.value; update(); });
         $('#ls-csv', el).onclick = () => exportCSV(cfg.csv, cfg.cols.filter((c) => c.label), el._rows);
         if (cfg.mount) cfg.mount(el, ctx);
         update();
@@ -67,6 +70,7 @@ const payBtn = '<button class="btn sm primary" data-act="pay">Receber</button>';
 /* ------------------------------------------------------------ Parcelas */
 export const createParcelas = makeList({
   title: 'Parcelas', sub: 'Todas as parcelas (normais e de acordo)', csv: 'parcelas.csv', placeholder: 'Buscar cliente, referência, contrato…',
+  dateFields: [{ k: 'venc', l: 'Vencimento', of: (p) => p.venc }, { k: 'pgto', l: 'Data do pagamento', of: (p) => p.dtPgto }, { k: 'baixa', l: 'Data da baixa', of: (p) => p.dtBaixa }],
   rows: (M) => M.parcelas, text: (p) => p.cliente + ' ' + p.referencia + ' ' + p.contrato,
   filters: [
     { key: 'status', label: 'Todos os status', options: () => ['Em Aberto', 'Vencido', 'Pago', 'Recomprado', 'Renegociado'], test: (r, v) => r.status === v },
@@ -111,6 +115,7 @@ export const createPagamentos = makeList({
 /* ------------------------------------------------------------ Recompras */
 export const createRecompras = makeList({
   title: 'Recompras', sub: 'Boletos recomprados e sua resolução', csv: 'recompras.csv', placeholder: 'Buscar cliente, referência, cartório…',
+  dateFields: [{ k: 'rec', l: 'Recomprada em', of: (r) => r.dtRecompra }, { k: 'venc', l: 'Vencimento', of: (r) => r.venc }, { k: 'pgto', l: 'Data do pagamento', of: (r) => r.dtPgto }, { k: 'prot', l: 'Data do protesto', of: (r) => r.dtProtesto }],
   rows: (M) => M.recompras, text: (r) => r.cliente + ' ' + r.referencia + ' ' + r.contrato + ' ' + (r.cartorio || '') + ' ' + (r.protocoloProtesto || ''),
   filters: [{ key: 'status', label: 'Todos os status', options: () => ['Pendente', 'Pago', 'Protestado', 'Renegociado'], test: (r, v) => (v === 'Pendente' ? !r.status : r.status === v) },
     { key: 'cart', label: 'Protesto: todos', options: () => [{ v: '__sem', l: 'Protestadas sem cartório informado' }, ...[...new Set(store.list('recompras').map((r) => r.cartorio).filter(Boolean))].sort().map((c) => ({ v: c, l: 'Cartório: ' + c }))], test: (r, v) => (v === '__sem' ? r.status === 'Protestado' && !r.cartorio : r.cartorio === v) },
@@ -132,6 +137,7 @@ export const createRecompras = makeList({
 /* ------------------------------------------------------------ Acordos */
 export const createAcordos = makeList({
   title: 'Acordos', sub: 'Renegociações em cadeia (1º, 2º acordo)', csv: 'acordos.csv', placeholder: 'Buscar cliente, referência…',
+  dateFields: [{ k: 'reneg', l: 'Renegociado em', of: (a) => a.dtReneg }, { k: 'pv', l: '1º vencimento', of: (a) => a.primeiroVenc }],
   rows: (M) => M.acordos, text: (a) => a.cliente + ' ' + a.referencia + ' ' + a.contrato,
   filters: [{ key: 'nivel', label: 'Todos os níveis', options: () => [{ v: 1, l: '1º acordo' }, { v: 2, l: '2º acordo' }], test: (a, v) => a.nivel === +v }, { key: 'sit', label: 'Todas as situações', options: () => [{ v: 'ok', l: 'OK' }, { v: 'pend', l: 'Com pendência' }, { v: 'venc', l: 'Com parcela vencida' }], test: (a, v) => (v === 'ok' ? a.alerta === 'OK' : v === 'pend' ? a.alerta !== 'OK' : a.parcelasAcordo.some((p) => p.status === 'Vencido')) }],
   summary: (rows, M) => { const sem = M.recompras.filter((r) => r.acordoCad === 'NÃO').length; return `<b>${rows.length}</b> acordo(s) · total renegociado <b>${brl(rows.reduce((s, a) => s + Number(a.valor || 0), 0))}</b>${sem ? ` · <b style="color:var(--bad)">${sem} recompra(s) renegociada(s) SEM acordo cadastrado</b> (veja em Recompras)` : ''}`; },
