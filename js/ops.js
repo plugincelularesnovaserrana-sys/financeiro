@@ -305,6 +305,26 @@ export async function ajustarEncargosRecompra(parcelaId, { encargos, motivo }) {
     log(t, 'Encargos da recompra', { entidade: 'recompra', id: parcelaId, ...ctInfo(p.contrato), detalhe: `Recompra da parcela ${p.n}: ${brl(antes)} → ${brl(novo)} (${encargos ? descAjuste(encargos) + ' — ' + motivo : 'encargos removidos'}).` });
   });
 }
+export async function editarDatasRecompra(parcelaId, { dtRecompra, dtBaixa, dtPgto }) {
+  need();
+  const iso = (v) => (v ? String(v).slice(0, 10) : null), hoje = hojeISO();
+  dtRecompra = iso(dtRecompra); dtBaixa = iso(dtBaixa); dtPgto = iso(dtPgto);
+  for (const [n, v] of [['recompra', dtRecompra], ['baixa', dtBaixa], ['pagamento', dtPgto]]) if (v && (!/^\d{4}-\d{2}-\d{2}$/.test(v) || v < '2015-01-01')) throw new OpError(`Data de ${n} inválida.`);
+  if (dtPgto && dtPgto > hoje) throw new OpError('A data do pagamento não pode ser futura.');
+  if (dtRecompra && dtRecompra > hoje) throw new OpError('A data da recompra não pode ser futura.');
+  return A().tx(async (t) => {
+    const r = await t.get('recompras', parcelaId), p = await t.get('parcelas', parcelaId);
+    if (!r || !p) throw new OpError('Recompra não encontrada.');
+    await semCancelamento(t, p.contrato);
+    if (!dtRecompra) throw new OpError('Informe a data da recompra.');
+    if (r.status === 'Pago' && !dtPgto) throw new OpError('Recompra paga precisa da data do pagamento.');
+    if (dtPgto && r.status !== 'Pago' && !((r.valorPago || 0) > 0)) throw new OpError('Só há data de pagamento em recompra paga ou com pagamento parcial.');
+    const antes = `recompra ${fmtData(p.dtBaixa) || '—'}, baixa ${fmtData(r.dtBaixa) || '—'}, pagamento ${fmtData(r.dtPgto) || '—'}`;
+    t.update('parcelas', parcelaId, { dtBaixa: dtRecompra });
+    t.update('recompras', parcelaId, { dtBaixa: dtBaixa, dtPgto: dtPgto });
+    log(t, 'Datas da recompra', { entidade: 'recompra', id: parcelaId, ...ctInfo(p.contrato), detalhe: `Parcela ${p.n}: ${antes} → recompra ${fmtData(dtRecompra)}, baixa ${fmtData(dtBaixa) || '—'}, pagamento ${fmtData(dtPgto) || '—'}.` });
+  });
+}
 export async function alternarJuridico(parcelaId) {
   need();
   return A().tx(async (t) => {

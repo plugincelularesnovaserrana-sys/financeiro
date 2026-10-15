@@ -201,6 +201,19 @@ export function acaoProtestar(parcelaId) {
 export async function acaoReabrirRecompra(parcelaId) {
   if (await confirmDialog('Reabrir esta recompra (volta a ficar sem resolução)?', { title: 'Reabrir recompra', okLabel: 'Reabrir' })) { await ops.resolverRecompra(parcelaId, null); toast('Recompra reaberta.', 'ok'); }
 }
+export function acaoDatas(parcelaId) { // adicionar / editar as datas da recompra
+  const r = M().rBy.get(parcelaId); if (!r) return;
+  const paga = r.status === 'Pago', podePgto = paga || r.valorPago > 0;
+  const m = modal({ title: `Datas da recompra — parcela ${r.nParc}${r.nivel ? ' (acordo ' + r.nivel + ')' : ''}`, size: 'sm',
+    body: `<div class="alert info"><b>${esc(r.cliente)}</b> · venc. ${fmtData(r.venc)} · ${badge(r.status || 'Pendente', r.status ? undefined : 'warn')}</div><div class="fg" style="margin-top:10px">
+    ${field('Data da recompra (quando a loja pagou o boleto ao banco)', `<input class="inp" type="date" id="dt-r" value="${r.dtRecompra || ''}" max="${hojeISO()}">`, '', 'full')}
+    ${field('Data da baixa (resolução: protesto, renegociação, quitação)', `<input class="inp" type="date" id="dt-b" value="${r.dtBaixa || ''}">`, '', 'full')}
+    ${podePgto ? field('Data do pagamento pelo cliente', `<input class="inp" type="date" id="dt-p" value="${r.dtPgto || ''}" max="${hojeISO()}">`, '', 'full') : ''}</div>
+    <div class="mute sm" style="margin-top:8px">Pode corrigir ou preencher datas que faltam. A alteração fica no histórico.</div>`,
+    actions: [{ label: 'Cancelar', cls: 'ghost' }, { label: 'Salvar', cls: 'primary', onClick: async () => {
+      await ops.editarDatasRecompra(parcelaId, { dtRecompra: $('#dt-r', m.el).value, dtBaixa: $('#dt-b', m.el).value, dtPgto: podePgto ? $('#dt-p', m.el).value : r.dtPgto }); toast('Datas da recompra salvas.', 'ok');
+    } }] });
+}
 export async function acaoJuridico(parcelaId) { await ops.alternarJuridico(parcelaId); toast('Marcação jurídica atualizada.', 'ok'); }
 export function acaoAjustar(parcelaId) { // encargos / desconto da recompra
   const r = M().rBy.get(parcelaId); if (!r) return;
