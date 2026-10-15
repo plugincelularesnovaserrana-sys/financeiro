@@ -99,6 +99,7 @@ export function createDetalhe(ctx, id) {
       if (!r.status) a.push(`<button class="btn sm ghost" data-a="prot" data-id="${r.parcela}">Protestar</button>`);
       if (r.status === 'Protestado') a.push(`<button class="btn sm ghost" data-a="prot" data-id="${r.parcela}">Dados do protesto</button>`);
       a.push(`<button class="btn sm ghost" data-a="dts" data-id="${r.parcela}">Datas</button>`);
+      if (r.status === 'Pago') a.push(`<button class="btn sm ghost" data-a="pgr" data-id="${r.parcela}">Editar pagamento</button>`);
       if (r.status !== 'Pago') a.push(`<button class="btn sm ghost" data-a="adj" data-id="${r.parcela}">Encargos / desconto</button><button class="btn sm ghost" data-a="jur" data-id="${r.parcela}">${r.juridico === 'Sim' ? 'Tirar do jurídico' : 'Jurídico'}</button>`);
       if (r.status && r.status !== 'Pago') a.push(`<button class="btn sm ghost" data-a="rereab" data-id="${r.parcela}">Reabrir</button>`);
       if (isAdmin() && !r.status && !(r.valorPago > 0)) a.push(`<button class="btn sm ghost" data-a="undorec" data-id="${r.parcela}">Desfazer</button>`);
@@ -129,7 +130,7 @@ export function createDetalhe(ctx, id) {
     pay: (b) => MD.abrirPagamento({ contrato: id, alvoId: b.dataset.id }), payrec: (b) => MD.abrirPagamento({ contrato: id, alvoTipo: 'recompra', alvoId: b.dataset.id }), payc: () => MD.abrirPagamento({ contrato: id }),
     rec: (b) => MD.acaoRecomprar(b.dataset.id), rend: (b) => MD.acaoRenegociarDireto(b.dataset.id), edit: (b) => MD.abrirEditarParcela(b.dataset.id), adjp: (b) => MD.abrirAjusteParcela(b.dataset.id),
     reopen: async (b) => { if (await confirmDialog('Reabrir esta parcela (volta a ficar em aberto)?', { okLabel: 'Reabrir' })) { await ops.reabrirParcela(b.dataset.id); toast('Parcela reaberta.', 'ok'); } },
-    acordo: (b) => MD.abrirAcordo(b.dataset.id), prot: (b) => MD.acaoProtestar(b.dataset.id), dts: (b) => MD.acaoDatas(b.dataset.id), adj: (b) => MD.acaoAjustar(b.dataset.id), jur: (b) => MD.acaoJuridico(b.dataset.id), rereab: (b) => MD.acaoReabrirRecompra(b.dataset.id),
+    acordo: (b) => MD.abrirAcordo(b.dataset.id), prot: (b) => MD.acaoProtestar(b.dataset.id), dts: (b) => MD.acaoDatas(b.dataset.id), pgr: (b) => MD.acaoPagamentoRecompra(b.dataset.id), adj: (b) => MD.acaoAjustar(b.dataset.id), jur: (b) => MD.acaoJuridico(b.dataset.id), rereab: (b) => MD.acaoReabrirRecompra(b.dataset.id),
     undorec: async (b) => { if (await confirmDialog('Desfazer a recompra desta parcela?', { okLabel: 'Desfazer', danger: true })) { await ops.desfazerRecompra(b.dataset.id); toast('Recompra desfeita.', 'ok'); } },
     delac: async (b) => { if (await confirmDialog(`Excluir o ${b.dataset.n}º acordo e suas parcelas?`, { okLabel: 'Excluir', danger: true })) { await ops.excluirAcordo(id, +b.dataset.n); toast('Acordo excluído.', 'ok'); } },
     'g-venc': () => { const M = ctx.M(); sel.clear(); selecionaveis(M).filter((x) => x.atraso > 0).forEach((x) => sel.add(x.key)); update(); },

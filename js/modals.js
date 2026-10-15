@@ -144,22 +144,39 @@ export function abrirEditarContrato(id) {
     ${field('Observações', `<input class="inp" id="ec-obs" value="${esc(c.obs || '')}">`)}
     ${field('Valor total (R$)', `<input class="inp" id="ec-total" value="${brInput(c.valorTotal)}">`)}
     ${field('Qtd. parcelas', `<input class="inp" id="ec-qtd" type="number" value="${c.qtd}">`)}
-    ${field('1º vencimento', `<input class="inp" id="ec-venc" type="date" value="${c.primeiroVenc || ''}">`, 'Alterar valor, quantidade ou 1º vencimento NÃO regera as parcelas — ajuste cada parcela na tela do cliente.', 'full')}
+    ${field('1º vencimento', `<input class="inp" id="ec-venc" type="date" value="${c.primeiroVenc || ''}">`, '', 'full')}
+    <div class="full"><label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer"><input type="checkbox" id="ec-rec"><span><b>Recalcular as parcelas em aberto</b> com o novo valor, quantidade e 1º vencimento. Parcelas pagas, recompradas ou com pagamento ficam como estão e o restante é dividido nas abertas.</span></label><div class="alert info" id="ec-prev" style="margin-top:8px;display:none"></div></div>
    </div>`, actions: [{ label: 'Cancelar', cls: 'ghost' }, { label: 'Salvar', cls: 'primary', onClick: async () => {
-      await ops.editarContrato(id, { cliente: $('#ec-nome', m.el).value, referencia: $('#ec-ref', m.el).value.trim(), obs: $('#ec-obs', m.el).value, valorTotal: parseBRL($('#ec-total', m.el).value), qtd: $('#ec-qtd', m.el).value, primeiroVenc: $('#ec-venc', m.el).value });
+      await ops.editarContrato(id, { cliente: $('#ec-nome', m.el).value, referencia: $('#ec-ref', m.el).value.trim(), obs: $('#ec-obs', m.el).value, valorTotal: parseBRL($('#ec-total', m.el).value), qtd: $('#ec-qtd', m.el).value, primeiroVenc: $('#ec-venc', m.el).value }, { recalcular: $('#ec-rec', m.el).checked });
       toast('Contrato atualizado.', 'ok');
     } }] });
+  const prev = () => {
+    const box = $('#ec-prev', m.el), on = $('#ec-rec', m.el).checked; box.style.display = on ? '' : 'none'; if (!on) return;
+    const pl = ops.planoRecalculo(M().parcelas.filter((p) => p.contrato === id), { valorTotal: parseBRL($('#ec-total', m.el).value) || 0, qtd: Number($('#ec-qtd', m.el).value) || 0, primeiroVenc: $('#ec-venc', m.el).value, mudouVenc: $('#ec-venc', m.el).value !== (c.primeiroVenc || '') });
+    box.innerHTML = pl.erro ? `<b style="color:var(--bad)">${esc(pl.erro)}</b>` : `${pl.fixas} parcela(s) pagas/marcadas preservadas · ${pl.vagas} em aberto passam a <b>${brl(pl.valores[0] || 0)}</b>${pl.valores.length > 1 && pl.valores[pl.valores.length - 1] !== pl.valores[0] ? ` (última ${brl(pl.valores[pl.valores.length - 1])})` : ''}${pl.mesmaGrade ? '' : ' · parcelas em aberto serão refeitas'}`;
+  };
+  ['#ec-rec', '#ec-total', '#ec-qtd', '#ec-venc'].forEach((q) => $(q, m.el).addEventListener('input', prev));
 }
 
 export function abrirEditarParcela(id) {
   const p = M().pBy.get(id); if (!p) return;
-  const trava = p.marc || p.parcialPago > 0;
-  const m = modal({ title: `Editar parcela ${p.n}${p.nivel ? ' (acordo ' + p.nivel + ')' : ''}`, size: 'sm', body: `<div class="fg">
+  const admin = app.user && app.user.role === 'admin', pago = M().pagamentos.some((g) => !g.estornado && g.alvoId === id), travaValor = p.parcialPago > 0 || pago;
+  const m = modal({ title: `Editar parcela ${p.n}${p.nivel ? ' (acordo ' + p.nivel + ')' : ''}`, size: 'sm', body: `<div class="alert info"><b>${esc(p.cliente)}</b> · situação atual: <b>${esc(p.marc || p.status)}</b></div><div class="fg" style="margin-top:10px">
     ${field('Vencimento', `<input class="inp" id="ep-venc" type="date" value="${p.venc}">`)}
-    ${field('Valor (R$)', `<input class="inp" id="ep-valor" value="${brInput(p.valor)}" ${trava ? 'disabled' : ''}>`, trava ? 'Parcela com pagamento/marcação: valor bloqueado.' : '')}</div>`,
-    actions: [{ label: 'Cancelar', cls: 'ghost' }, { label: 'Salvar', cls: 'primary', onClick: async () => { await ops.editarParcela(id, { venc: $('#ep-venc', m.el).value, valor: trava ? null : parseBRL($('#ep-valor', m.el).value) }); toast('Parcela atualizada.', 'ok'); } }] });
+    ${field('Valor (R$)', `<input class="inp" id="ep-valor" value="${brInput(p.valor)}" ${travaValor ? 'disabled' : ''}>`, travaValor ? 'Há pagamento lançado: valor bloqueado.' : '')}
+    ${field('Situação', `<select class="inp" id="ep-marc" ${admin ? '' : 'disabled'}><option value="">Em aberto</option><option ${p.marc === 'Pago' ? 'selected' : ''}>Pago</option><option ${p.marc === 'Recomprado' ? 'selected' : ''}>Recomprado</option><option ${p.marc === 'Renegociado' ? 'selected' : ''}>Renegociado</option></select>`, admin ? '' : 'Só administrador muda a situação.', 'full')}
+    ${field('Data da recompra / baixa', `<input class="inp" id="ep-bx" type="date" value="${p.dtBaixa || ''}">`, '', '')}
+    ${field('Data do pagamento', `<input class="inp" id="ep-pg" type="date" value="${p.dtPgto || ''}" max="${hojeISO()}">`, '', '')}</div>
+    <div class="mute sm" style="margin-top:8px" id="ep-aviso"></div>`,
+    actions: [{ label: 'Cancelar', cls: 'ghost' }, { label: 'Salvar', cls: 'primary', onClick: async () => {
+      const marc = $('#ep-marc', m.el).value;
+      if (admin && marc !== (p.marc || '') && !(await confirmDialog(`Mudar a situação desta parcela de "${p.marc || 'Em aberto'}" para "${marc || 'Em aberto'}"?` + (M().rBy.get(id) && marc !== 'Recomprado' ? ' A recompra vinculada será removida.' : ''), { title: 'Confirmar mudança de situação', okLabel: 'Mudar' }))) return false;
+      await ops.corrigirParcela(id, { venc: $('#ep-venc', m.el).value, valor: travaValor ? null : parseBRL($('#ep-valor', m.el).value), marc: admin ? marc : null, dtBaixa: $('#ep-bx', m.el).value, dtPgto: $('#ep-pg', m.el).value });
+      toast('Parcela atualizada.', 'ok');
+    } }] });
+  const ver = () => { const mc = $('#ep-marc', m.el).value; $('#ep-bx', m.el).parentElement.style.display = mc ? '' : 'none'; $('#ep-pg', m.el).parentElement.style.display = mc === 'Pago' ? '' : 'none'; $('#ep-aviso', m.el).textContent = mc === 'Pago' ? 'Pago: informe a data do pagamento.' : mc === 'Recomprado' ? 'Cria/mantém a recompra desta parcela.' : ''; };
+  $('#ep-marc', m.el).addEventListener('change', ver); ver();
 }
-
 export function abrirAjusteParcela(id) {
   const p = M().pBy.get(id); if (!p) return;
   if (p.marc) return toast(`A parcela já está ${p.marc}: não dá para alterar o valor devido.`, 'warn');
@@ -213,6 +230,21 @@ export function acaoDatas(parcelaId) { // adicionar / editar as datas da recompr
     actions: [{ label: 'Cancelar', cls: 'ghost' }, { label: 'Salvar', cls: 'primary', onClick: async () => {
       await ops.editarDatasRecompra(parcelaId, { dtRecompra: $('#dt-r', m.el).value, dtBaixa: $('#dt-b', m.el).value, dtPgto: podePgto ? $('#dt-p', m.el).value : r.dtPgto }); toast('Datas da recompra salvas.', 'ok');
     } }] });
+}
+export function acaoPagamentoRecompra(parcelaId) { // corrigir / reabrir recompra paga (sem lançamento no caixa)
+  const r = M().rBy.get(parcelaId); if (!r) return;
+  if (M().pagamentos.some((g) => !g.estornado && g.alvoTipo === 'recompra' && g.alvoId === parcelaId)) return toast('Pagamento lançado no caixa: use "Estornar" em Pagamentos para desfazer.', 'warn');
+  const admin = app.user && app.user.role === 'admin';
+  const m = modal({ title: `Pagamento da recompra — parcela ${r.nParc}${r.nivel ? ' (acordo ' + r.nivel + ')' : ''}`, size: 'sm',
+    body: `<div class="alert info"><b>${esc(r.cliente)}</b> · venc. ${fmtData(r.venc)}<br>Valor da parcela <b>${brl(r.valorBase)}</b> · registrada como <b>paga</b> (sem lançamento no caixa)</div>
+      <div class="fg" style="margin-top:10px">${field('Valor pago (R$)', `<input class="inp" id="pr-pago" value="${brInput(r.pagoTotal)}">`)}${field('Data do pagamento', `<input class="inp" id="pr-d" type="date" value="${r.dtPgto || ''}" max="${hojeISO()}">`)}
+      ${ajusteFields('pr', { t: r.encargos > 0 ? '+' : r.encargos < 0 ? '-' : '0', v: Math.abs(r.encargos || 0), m: r.encargosMotivo })}</div><div class="preview" id="pr-prev"></div>`,
+    actions: [{ label: 'Cancelar', cls: 'ghost' }, ...(admin ? [{ label: 'Reabrir (desfazer pago)', cls: 'danger', onClick: async () => {
+      if (!(await confirmDialog('Desfazer o pagamento e voltar a recompra para "sem resolução"?', { title: 'Reabrir recompra', okLabel: 'Reabrir' }))) return false;
+      await ops.corrigirPagamentoRecompra(parcelaId, { reabrir: true }); toast('Recompra reaberta.', 'ok'); } }] : []),
+      { label: 'Salvar', cls: 'primary', onClick: async () => { const a = lerAjuste('pr', m.el); await ops.corrigirPagamentoRecompra(parcelaId, { valorPago: parseBRL($("#pr-pago", m.el).value), dtPgto: $('#pr-d', m.el).value, encargos: a.valor, motivo: a.motivo }); toast('Pagamento da recompra corrigido.', 'ok'); } }] });
+  const prev = () => { const a = lerAjuste('pr', m.el).valor; $('#pr-prev', m.el).innerHTML = `Valor da recompra: <b>${brl(round2(r.valorBase + a))}</b>${a ? ` <span class="mute">(${a > 0 ? '+' : '−'}${brl(Math.abs(a))})</span>` : ''}`; };
+  ligarAjuste('pr', m.el, prev); prev();
 }
 export async function acaoJuridico(parcelaId) { await ops.alternarJuridico(parcelaId); toast('Marcação jurídica atualizada.', 'ok'); }
 export function acaoAjustar(parcelaId) { // encargos / desconto da recompra
